@@ -170,3 +170,30 @@ def validate_series(
     # Applied across the whole family tested on this series, not per pattern.
     apply_multiple_testing_correction(reports)
     return reports
+
+
+def persist(con, reports, *, validated_at_ms: int) -> int:
+    """Write every validation result into the qualification registry.
+
+    Records rejections as well as passes: the brief shows a rejected setup with its
+    disqualifiers, because absence and rejection look identical to a reader and are not
+    the same thing. Returns how many qualify.
+    """
+    from ..qualification import SetupStats, record
+
+    n_ok = 0
+    for r in reports:
+        stats = SetupStats(
+            setup=r.pattern, symbol=r.symbol, timeframe=r.timeframe,
+            direction=r.direction, stop_atr=r.stop_atr, target_r=r.target_r,
+            max_bars=48, round_trip_bps=r.round_trip_bps,
+            n_in=r.in_sample.n, n_out=r.out_sample.n,
+            gross_in=r.gross_in, gross_out=r.gross_out,
+            net_in=r.in_sample.expectancy_r,
+            ci_low=r.in_sample.ci_low, ci_high=r.in_sample.ci_high,
+            p_value=r.baseline.p_value if r.baseline else None,
+            survives_bh=bool(r.survives_correction),
+        )
+        if record(con, stats, validated_at_ms=validated_at_ms):
+            n_ok += 1
+    return n_ok

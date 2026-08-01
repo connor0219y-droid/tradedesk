@@ -96,6 +96,64 @@ _DDL = [
         value VARCHAR NOT NULL
     )
     """,
+    # --- phases 4-6 ---------------------------------------------------------
+    # Every signal the engine emits, logged whether or not it was taken, so it can be
+    # graded later. A call that cannot be scored is a slot machine.
+    """
+    CREATE TABLE IF NOT EXISTS emitted_signals (
+        signal_id     VARCHAR PRIMARY KEY,
+        emitted_at_ms BIGINT  NOT NULL,
+        setup         VARCHAR NOT NULL,
+        symbol        VARCHAR NOT NULL,
+        timeframe     VARCHAR NOT NULL,
+        direction     VARCHAR NOT NULL,
+        bar_open_ms   BIGINT  NOT NULL,
+        entry         DOUBLE, stop DOUBLE, target DOUBLE,
+        invalidation  VARCHAR,
+        base_rate_n   INTEGER, base_rate_net DOUBLE,
+        ci_low DOUBLE, ci_high DOUBLE,
+        qualified     BOOLEAN NOT NULL,
+        near_miss     BOOLEAN NOT NULL,
+        failed_checks VARCHAR,
+        context       VARCHAR
+    )
+    """,
+    # Predict-first: the user's own read, recorded BEFORE the tool reveals anything.
+    """
+    CREATE TABLE IF NOT EXISTS predictions (
+        prediction_id  VARCHAR PRIMARY KEY,
+        made_at_ms     BIGINT  NOT NULL,
+        symbol         VARCHAR NOT NULL,
+        timeframe      VARCHAR NOT NULL,
+        bar_open_ms    BIGINT  NOT NULL,
+        direction      VARCHAR NOT NULL,
+        stop           DOUBLE,
+        note           VARCHAR,
+        signal_id      VARCHAR
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS trades (
+        trade_id       VARCHAR PRIMARY KEY,
+        symbol         VARCHAR NOT NULL,
+        setup          VARCHAR,
+        direction      VARCHAR NOT NULL,
+        thesis         VARCHAR,
+        entry_ms       BIGINT  NOT NULL,
+        exit_ms        BIGINT,
+        entry          DOUBLE  NOT NULL,
+        stop           DOUBLE  NOT NULL,
+        target         DOUBLE,
+        exit_price     DOUBLE,
+        exit_reason    VARCHAR,
+        size           DOUBLE,
+        mfe_r          DOUBLE,
+        mae_r          DOUBLE,
+        account_size   DOUBLE,
+        signal_id      VARCHAR,
+        logged_at_ms   BIGINT NOT NULL
+    )
+    """,
     "CREATE VIEW IF NOT EXISTS bars_v AS "
     "SELECT *, make_timestamp(bar_open_ms * 1000) AS ts_utc FROM bars",
 ]
@@ -132,8 +190,11 @@ def connect(db_path: Path | str, *, read_only: bool = False) -> duckdb.DuckDBPyC
 
 
 def init_schema(con: duckdb.DuckDBPyConnection) -> None:
+    from .qualification import DDL as QUALIFICATION_DDL
+
     for stmt in _DDL:
         con.execute(stmt)
+    con.execute(QUALIFICATION_DDL)
     con.execute(
         "INSERT INTO schema_meta VALUES ('schema_version', ?) ON CONFLICT DO NOTHING",
         [str(SCHEMA_VERSION)],

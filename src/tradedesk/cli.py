@@ -18,6 +18,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.table import Table
+from rich.text import Text
 
 from . import store
 from .config import load_config, load_dotenv
@@ -291,7 +292,8 @@ def validate(
     from .backtest import render, render_detail, validate_series
 
     cfg = _load(config)
-    con = store.connect(cfg.data.db_path, read_only=True)
+    con = store.connect(cfg.data.db_path)
+    store.init_schema(con)
     reports = validate_series(
         con, cfg, symbol, timeframe,
         as_of=datetime.now(timezone.utc),
@@ -303,7 +305,15 @@ def validate(
         console.print(f"[red]no data[/red] for {symbol} {timeframe}")
         raise typer.Exit(1)
 
+    from datetime import datetime, timezone
+
+    from .backtest import persist
+    n_ok = persist(con, reports, validated_at_ms=int(datetime.now(timezone.utc).timestamp()*1000))
     render(console, reports)
+    console.print(
+        f"[dim]{len(reports)} results written to the qualification registry · "
+        f"{n_ok} qualify for signalling[/dim]"
+    )
     if detail or pattern:
         for rep in sorted(reports, key=lambda r: -(r.gross_in or -9e9)):
             render_detail(console, rep)
@@ -311,6 +321,108 @@ def validate(
 
 def _fmt(value, digits: int = 2) -> str:
     return "—" if value is None else f"{value:,.{digits}f}"
+
+
+@app.command()
+def brief(
+    symbol: Optional[str] = typer.Option(None, "--symbol"),
+    timeframe: str = typer.Option("5m", "--timeframe"),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Pre-session brief: regime, levels, validated setups, and the cost drag."""
+    from datetime import datetime, timezone
+
+    from . import brief as brief_mod
+
+    cfg = _load(config)
+    con = store.connect(cfg.data.db_path, read_only=True)
+    now = datetime.now(timezone.utc)
+    symbols = [symbol] if symbol else cfg.data.symbols
+    for i, sym in enumerate(symbols):
+        b = brief_mod.build(con, cfg, sym, timeframe, as_of=now)
+        if b is None:
+            console.print(f"[red]no data[/red] for {sym} {timeframe}")
+            continue
+        if i:
+            console.print("\n" + "─" * 78 + "\n")
+        brief_mod.render(console, b)
+
+
+@app.command()
+def live(
+    symbol: str = typer.Option(..., "--symbol"),
+    timeframe: str = typer.Option("5m", "--timeframe"),
+    predict: bool = typer.Option(
+        True, "--predict/--no-predict",
+        help="prompt for your own read before revealing anything (default on)",
+    ),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Live companion. Signal cards ONLY for setups that passed the gate."""
+    from datetime import datetime, timezone
+
+    from . import live as live_mod
+
+    cfg = _load(config)
+    con = store.connect(cfg.data.db_path)
+    store.init_schema(con)
+    view = live_mod.build(con, cfg, symbol, timeframe, as_of=datetime.now(timezone.utc))
+    if view is None:
+        console.print(f"[red]no data[/red] for {symbol} {timeframe}")
+        raise typer.Exit(1)
+
+    prediction = None
+    if predict:
+        prediction = live_mod.prompt_prediction(console, view)
+        if prediction:
+            live_mod.record_prediction(con, view, prediction)
+    live_mod.render(console, view, cfg, prediction=prediction)
+
+
+@app.command()
+def size(
+    entry: float = typer.Option(..., "--entry"),
+    stop: float = typer.Option(..., "--stop"),
+    thesis: str = typer.Option(
+        ..., "--thesis", help="required: why this trade, in your own words"
+    ),
+    account: Optional[float] = typer.Option(None, "--account"),
+    risk_pct: Optional[float] = typer.Option(None, "--risk-pct"),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Position size. Refuses to compute one without a stated thesis."""
+    from .live import Position, ThesisRequired
+
+    cfg = _load(config)
+    try:
+        p = Position(
+            account_size=account or float(cfg.risk.get("account_size", 100000.0)),
+            risk_pct=risk_pct or float(cfg.risk.get("risk_pct", 1.0)),
+            entry=entry, stop=stop, thesis=thesis,
+        )
+    except ThesisRequired as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    t = Table(box=None, header_style="bold", pad_edge=False)
+    t.add_column("field"); t.add_column("value", justify="right")
+    t.add_row("account", f"{p.account_size:,.2f}")
+    t.add_row("risk", f"{p.risk_pct:.2f}%  =  {p.risk_dollars:,.2f}")
+    t.add_row("risk per unit", f"{p.risk_per_unit:,.4f}")
+    t.add_row("size", f"{p.units:,.6f} units")
+    t.add_row("notional", f"{p.notional:,.2f}")
+    t.add_row("1R", f"{p.one_r_dollars():,.2f}")
+    lev = p.leverage
+    t.add_row("leverage", Text(f"{lev:.2f}×", style="red" if lev > 1.0 else "white"))
+    console.print(t)
+    if lev > 1.0:
+        console.print(
+            f"[red]This stop requires {lev:.1f}× leverage on the stated account. "
+            "A tighter stop needs a bigger position for the same risk.[/red]"
+        )
+    max_pct = float(cfg.risk.get("max_risk_pct", 2.0))
+    if p.risk_pct > max_pct:
+        console.print(f"[red]risk {p.risk_pct:.2f}% exceeds your stated max {max_pct:.2f}%[/red]")
 
 
 @app.command()
@@ -341,3 +453,106 @@ def status(config: Optional[Path] = typer.Option(None, "--config")) -> None:
 
 if __name__ == "__main__":
     app()
+
+
+journal_app = typer.Typer(help="Trade journal and the feedback loop.")
+app.add_typer(journal_app, name="journal")
+
+
+@journal_app.command("add")
+def journal_add(
+    symbol: str = typer.Option(..., "--symbol"),
+    direction: str = typer.Option(..., "--direction", help="long or short"),
+    entry: float = typer.Option(..., "--entry"),
+    stop: float = typer.Option(..., "--stop"),
+    thesis: str = typer.Option(..., "--thesis", help="required"),
+    setup: Optional[str] = typer.Option(None, "--setup"),
+    exit_price: Optional[float] = typer.Option(None, "--exit"),
+    exit_reason: Optional[str] = typer.Option(None, "--exit-reason"),
+    size_units: Optional[float] = typer.Option(None, "--size"),
+    mfe_r: Optional[float] = typer.Option(None, "--mfe-r"),
+    mae_r: Optional[float] = typer.Option(None, "--mae-r"),
+    entry_ms: Optional[int] = typer.Option(None, "--entry-ms"),
+    exit_ms: Optional[int] = typer.Option(None, "--exit-ms"),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Log a trade. TradingView has no public fill API, so this is manual by design."""
+    from . import journal as jr
+    from .timeutil import now_ms
+
+    cfg = _load(config)
+    con = store.connect(cfg.data.db_path)
+    store.init_schema(con)
+    tid = jr.log_trade(
+        con, symbol=symbol, setup=setup, direction=direction, thesis=thesis,
+        entry_ms=entry_ms or now_ms(), exit_ms=exit_ms, entry=entry, stop=stop,
+        exit_price=exit_price, exit_reason=exit_reason, size=size_units,
+        mfe_r=mfe_r, mae_r=mae_r,
+        account_size=float(cfg.risk.get("account_size", 100000.0)),
+    )
+    console.print(f"[green]logged[/green] {tid}")
+
+
+@journal_app.command("report")
+def journal_report(
+    symbol: Optional[str] = typer.Option(None, "--symbol"),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Rolling stats, behavioural flags, and live expectancy vs the backtested number."""
+    from . import journal as jr
+
+    cfg = _load(config)
+    con = store.connect(cfg.data.db_path)
+    store.init_schema(con)
+    trades = jr.load_trades(con, symbol=symbol)
+    if not trades:
+        console.print("[dim]no trades logged — `tradedesk journal add` to start[/dim]")
+        return
+
+    risk_pct = float(cfg.risk.get("risk_pct", 1.0))
+    s = jr.rolling_stats(trades, risk_pct=risk_pct)
+    t = Table(title="rolling", box=None, header_style="bold", title_justify="left",
+              pad_edge=False)
+    for c in ("n", "win", "expectancy", "profit factor", "max DD", "risk of ruin"):
+        t.add_column(c, justify="right")
+    t.add_row(
+        f"{s.n:,}",
+        "—" if s.win_rate is None else f"{s.win_rate:.1%}",
+        "—" if s.expectancy_r is None else f"{s.expectancy_r:+.3f}R",
+        "—" if s.profit_factor is None else f"{s.profit_factor:.2f}",
+        "—" if s.max_drawdown_r is None else f"{s.max_drawdown_r:.2f}R",
+        "—" if s.risk_of_ruin is None else
+        Text(f"{s.risk_of_ruin:.1%}", style="red" if s.risk_of_ruin > 0.1 else "white"),
+    )
+    console.print(t)
+
+    flags = jr.behavioural_flags(trades, max_risk_pct=float(cfg.risk.get("max_risk_pct", 2.0)))
+    console.print()
+    if flags:
+        ft = Table(title="behavioural flags", box=None, header_style="bold",
+                   title_justify="left", pad_edge=False)
+        ft.add_column("trade"); ft.add_column("flag")
+        for tid, fs in flags.items():
+            for f in fs:
+                ft.add_row(tid[:8], Text(f, style="yellow"))
+        console.print(ft)
+    else:
+        console.print("[dim]no behavioural flags[/dim]")
+
+    console.print()
+    dt = Table(title="live vs backtest — the report that localises the problem", box=None,
+               header_style="bold", title_justify="left", pad_edge=False)
+    for c in ("setup", "live n", "live exp", "backtest exp", "gap", "reading"):
+        dt.add_column(c, justify="right" if c not in ("setup", "reading") else "left")
+    divs = jr.live_vs_backtest(con, trades, symbol=symbol)
+    if not divs:
+        dt.add_row("[dim]no trades tagged with a setup[/dim]", "", "", "", "", "")
+    for d in divs:
+        dt.add_row(
+            d.setup, f"{d.live_n:,}",
+            "—" if d.live_expectancy is None else f"{d.live_expectancy:+.3f}R",
+            "—" if d.backtest_expectancy is None else f"{d.backtest_expectancy:+.3f}R",
+            "—" if d.gap is None else f"{d.gap:+.3f}R",
+            Text(d.reading, style="yellow" if "EXECUTION" in d.reading else "dim"),
+        )
+    console.print(dt)

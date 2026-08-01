@@ -13,7 +13,7 @@ from .report import (PatternReport, apply_multiple_testing_correction,
                      render, render_detail)
 from .split import LeakageError, Split, make_split, partition_trades
 from .stats import Stats, compute
-from .validate import validate_series
+from .validate import persist, validate_series
 
 __all__ = [
     "run_backtest", "BacktestConfig", "BacktestResult", "Trade",
@@ -22,5 +22,5 @@ __all__ = [
     "run_baseline", "BaselineResult",
     "make_split", "partition_trades", "Split", "LeakageError",
     "PatternReport", "render", "render_detail", "validate_series",
-    "apply_multiple_testing_correction",
+    "apply_multiple_testing_correction", "persist",
 ]
