@@ -1,0 +1,97 @@
+# tradedesk configuration
+#
+# Phase 1 consumes [venue], [data], [session] and [quality].
+# [costs], [risk] and [backtest] are defined now because phases 3-6 depend on them
+# and their defaults deserve scrutiny before they silently shape a backtest.
+
+[venue]
+name = "coinbase"
+ccxt_id = "coinbaseexchange"
+# Coinbase rejects (HTTP 400) any request whose range/granularity exceeds 300 buckets.
+max_bars_per_request = 300
+# Grace period past a bar's close before it is considered final. Coinbase does not
+# publish a just-closed bucket immediately -- ~140s of lag measured on 2026-08-01.
+# 600s = two 5m bars of margin. Re-measure before tightening.
+settle_seconds = 600
+user_agent = "tradedesk/0.1"
+request_timeout_ms = 20000
+max_retries = 5
+retry_backoff_seconds = 1.0
+
+[data]
+db_path = "data/tradedesk.duckdb"
+# ccxt unified symbols. These map to COINBASE:BTCUSD / ETHUSD / SOLUSD on TradingView --
+# chart the same venue you measure, or the base rates describe a different instrument.
+symbols = ["BTC/USD", "ETH/USD", "SOL/USD"]
+# Coinbase serves only 1m/5m/15m/1h/6h/1d. 30m and 4h are rejected and must be
+# derived by aggregation from a stored base timeframe.
+timeframes = ["1m", "5m", "15m", "1h"]
+history_start = "2022-08-01"
+
+[session]
+timezone = "America/New_York"
+# Stored on every bar. Bump when the session definition changes; readers refuse to
+# blend versions rather than quietly mixing two definitions.
+calendar_version = 1
+# Crypto trades 24/7 so there is no opening bell. We anchor the session to the ET
+# calendar day: the trader is US-based, midnight ET always exists and is never
+# ambiguous (US transitions happen at 02:00), and it lines up with how equities will
+# be labelled later. Opening range and session VWAP anchor here.
+crypto_day_anchor = "00:00"
+opening_range_minutes = [5, 15, 30]
+# Equities, phase 2+. RTH is always 78 5m bars and premarket always 66, regardless
+# of DST -- that invariant is asserted in the test suite.
+equity_rth = ["09:30", "16:00"]
+equity_premarket = ["04:00", "09:30"]
+
+[quality]
+# Fraction of the requested range that must actually be covered.
+min_coverage_pct = 99.0
+# Absent bars as a share of the covered grid. On a 24/7 venue an absent bar means no
+# trades occurred. Above the warn line, multi-bar pattern detection is measuring
+# non-contiguous windows; above the block line it is measuring noise.
+# Reference points measured 2026-08-01 over a 12h window (145 possible 5m bars):
+#   BTC-USD 145, SOL-USD 145, ALEPH-USD 143, ACS-USD 78, AERGO-USD 72.
+absent_pct_warn = 5.0
+absent_pct_block = 20.0
+# Robust outlier detection on log returns: MAD * 1.4826 is the Fisher-consistency
+# constant making MAD a consistent estimator of sigma under a Gaussian reference.
+outlier_mad_k = 8.0
+# MAD collapses to zero in dead-flat windows, making the robust z-score infinite and
+# flagging every one-tick move. Floor sigma so that cannot happen.
+sigma_floor_bps = 1.0
+# Threshold-free backstop, in case a whole window is corrupt and fools the robust
+# estimator entirely.
+outlier_abs_return = 0.20
+
+[costs]
+# Applied on BOTH sides of every backtested trade in phase 3. A strategy that is
+# profitable gross and negative net is a losing strategy.
+[costs.default]
+taker_fee_bps = 60.0   # Coinbase Advanced Trade retail taker; conservative
+maker_fee_bps = 40.0
+spread_bps = 2.0
+slippage_bps = 3.0
+
+[costs.overrides."SOL/USD"]
+spread_bps = 4.0
+slippage_bps = 5.0
+
+[risk]
+account_size = 10000.0
+risk_pct = 1.0
+max_risk_pct = 2.0
+default_stop_atr = 1.0
+targets_r = [1.0, 1.5, 2.0, 3.0]
+
+[backtest]
+atr_period = 14
+# Out-of-sample discipline: rules are fit on the older slice, base rates reported on
+# the held-out remainder. The fit window and the reporting window must never overlap
+# by a single bar.
+in_sample_pct = 70
+# Refuse to display a base rate below this n; label anything below `provisional_n`
+# as provisional.
+min_sample_size = 30
+provisional_n = 100
+bootstrap_iterations = 10000
