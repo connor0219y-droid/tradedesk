@@ -48,8 +48,32 @@ make setup          # uv sync + create the DuckDB store
 make fetch          # backfill (~85 min, resumable — safe to interrupt)
 make quality        # is the data trustworthy?
 make validate       # backtest every pattern vs a random baseline
-make test           # 138 tests, no network required
+make test           # 171 tests, no network required
 ```
+
+Then, daily:
+
+```bash
+make brief          # before the session: regime, levels, validated setups, cost drag
+make live           # during: where price sits, what triggered, any qualifying signals
+make journal        # after: your live expectancy vs the backtested number
+```
+
+The full command list:
+
+| command | what it does |
+|---|---|
+| `tradedesk init` | create the store |
+| `tradedesk fetch [--symbol --timeframe --until]` | backfill, idempotent and resumable |
+| `tradedesk quality [--symbol --timeframe]` | data-quality verdict per series |
+| `tradedesk levels --symbol X [--timeframe --at]` | every level, sorted by distance in ATR |
+| `tradedesk validate --symbol X [--pattern --stop-atr --target-r --draws --detail]` | backtest vs a random baseline; writes the qualification registry |
+| `tradedesk brief [--symbol --timeframe]` | pre-session brief |
+| `tradedesk live --symbol X [--timeframe] [--no-predict]` | live companion, predict-first by default |
+| `tradedesk size --entry --stop --thesis [--account --risk-pct]` | position size; refuses without a thesis |
+| `tradedesk journal add --symbol --direction --entry --stop --thesis [...]` | log a trade |
+| `tradedesk journal report [--symbol]` | rolling stats, behavioural flags, live vs backtest |
+| `tradedesk status` | what the store holds |
 
 Requires [`uv`](https://docs.astral.sh/uv/). It pins its own Python 3.12.
 
@@ -75,6 +99,58 @@ are refused outright rather than shown with a caveat:
 
 **What it does not do:** place orders, read your TradingView fills (there's no public API
 — log trades manually or paste a CSV), predict prices, or tell you what to trade.
+
+---
+
+## The gate: when the tool is allowed to tell you to trade
+
+This is the load-bearing rule of the whole system. A signal card is emitted **only** for
+a setup that:
+
+1. survived **Benjamini-Hochberg** correction across the family it was tested in, **and**
+2. **held the sign** of its expectancy out of sample, **and**
+3. has **positive net expectancy at your actual fee tier**, **and**
+4. was measured on **n ≥ 100** trades.
+
+**As of the current study, nothing qualifies.** So `tradedesk live` prints:
+
+```
+╭──────────────────── NO QUALIFYING SETUPS ────────────────────╮
+│ No setup on this instrument has passed the gate.             │
+│ No signal cards will be emitted. This is the measured        │
+│ answer, not a missing feature.                               │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+That message is only meaningful if the code path that *does* emit a card demonstrably
+works — otherwise "nothing qualifies" is indistinguishable from a bug. So there are two
+complementary tests: one breaks each criterion in isolation and asserts no card appears,
+and one injects a synthetic qualifying setup and asserts a card **is** produced. A third
+asserts that tightening the criteria invalidates previously-stored passes rather than
+grandfathering them in.
+
+**Rejection is shown, not hidden.** The brief lists every tested setup with its
+disqualifiers, because absence and rejection look identical to a reader and are not the
+same thing:
+
+```
+doji_long   NOT VALIDATED   failed Benjamini-Hochberg (p=0.608); out-of-sample sign
+                            not held (in −0.0069R, out −0.0323R); net −18.26R at
+                            248 bps is not positive
+```
+
+**Patterns that trigger are still shown**, with their measured expectancy attached —
+including negative ones, under a `NEGATIVE EXPECTANCY` banner. Hiding the setups that
+tempt you removes exactly the information that would teach you what they cost.
+
+**The cost drag is permanently on screen.** It moves with volatility: at the 10th ATR
+percentile a 1×ATR(5m) stop costs ~64R per round trip, against ~19R at typical
+volatility. Same fee, smaller risk, larger multiple.
+
+Two smaller refusals in the same spirit: **position sizing requires a thesis** (a size
+computed from a stop you can't justify is a number that makes a bad trade feel rigorous),
+and **predict-first is on by default** — you're shown price and time only, and prompted
+for your own read, before anything measured is revealed. `--no-predict` turns it off.
 
 ---
 
@@ -224,14 +300,22 @@ Verified against real bars: hour 01 ET appears +4 times over four years, hour 02
 
 ## What isn't built
 
-Phases 1–3 are complete: the candle store, the causal level engine, and the pattern
-validator. Not built: the pre-session brief (Phase 4), the live signal engine with
-predict-first mode (Phase 5), and the trade journal (Phase 6).
+All six phases are complete: the candle store, the causal level engine, the pattern
+validator, the pre-session brief, the live companion, and the journal.
 
-Tests for those phases exist as `pytest.mark.skip` with named reasons rather than being
-stubbed into passing — a test that asserts nothing but reports green claims a guarantee
-that doesn't exist.
-
-Equities via Alpaca are deferred, but `timeutil` already handles RTH 09:30–16:00 and
+**Equities and futures are deferred.** `timeutil` already handles RTH 09:30–16:00 and
 premarket 04:00–09:30, and the session model is versioned so redefining it is a migration
-rather than a silent corruption.
+rather than a silent corruption — but the session grouping is currently the ET calendar
+day, and the cost model is bps-of-notional, which futures aren't. See the architecture
+notes in [FINDINGS.md](FINDINGS.md).
+
+**TradingView fills are not read automatically.** There's no public API for it, and
+scraping it is out of scope by design. Log trades with `tradedesk journal add`.
+
+**Alerts are local only** — terminal bell and macOS notification centre. `notify.py` has
+no HTTP client at all; not disabled, absent. A trading tool that phones home leaks your
+positions, and that failure mode is silent.
+
+A handful of tests remain `pytest.mark.skip` with named reasons rather than being stubbed
+into passing — a test that asserts nothing but reports green claims a guarantee that
+doesn't exist.
