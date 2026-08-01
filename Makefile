@@ -1,7 +1,7 @@
 # tradedesk -- common commands
 # `just` is not installed on this machine, so this is a Makefile. GNU Make 3.81 (macOS).
 
-.PHONY: help setup test fetch fetch-5m quality status clean check levels levels-sweep
+.PHONY: help setup test fetch fetch-5m quality status clean check levels levels-sweep validate
 
 help:
 	@echo "setup     install dependencies and create the store"
@@ -11,6 +11,7 @@ help:
 	@echo "quality   print the data-quality report"
 	@echo "levels    print the level table for a symbol/date"
 	@echo "levels-sweep  assert no level is ever NaN or inf across the whole store"
+	@echo "validate  backtest every pattern vs a random baseline"
 	@echo "status    show what the store currently holds"
 	@echo "check     test + quality, the pre-flight before trusting a result"
 	@echo "clean     delete the candle store (destructive)"
@@ -39,6 +40,9 @@ levels:
 
 levels-sweep:
 	uv run pytest -m store -q -s
+
+validate:
+	uv run tradedesk validate --symbol "BTC/USD" --timeframe 5m
 
 check: test levels-sweep quality
 

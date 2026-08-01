@@ -79,18 +79,61 @@ outlier_abs_return = 0.20
 # at tick_size. Scaling by ATR makes the profile comparable across BTC near 60,000 and
 # SOL near 150; fixing it per session stops bucket boundaries from shifting every bar.
 profile_buckets_per_atr = 100
+ema_fast = 20
+ema_slow = 50
 tick_size = 0.01
 value_area_pct = 70.0
-# Distances beyond this many ATR are logged as level.extreme_distance. NOT capped --
-# a large finite number is honest, and capping would fabricate a value.
-extreme_distance_atr = 50.0
+# Distances beyond these are flagged as level.extreme_distance. NOT capped -- a large
+# finite number is honest, and capping would fabricate a value.
+#
+# CALIBRATED from 119,036,757 distance observations across the full 4-year store. The
+# original a-priori 50.0 was firing on 3.86% of observations -- one bar in 26, which is
+# noise, not pathology.
+#
+# Distance-in-ATR is TIMEFRAME-DEPENDENT: ATR(14) on 1m bars is tiny while a prior-day
+# level sits a whole day's range away, so the same level is ~20 intraday-ATR away on 1m
+# and ~2 on 1h. That is real, not an artifact -- intraday ATR answers "how many
+# stop-widths away is this", which is what matters when sizing. So the threshold is a
+# per-timeframe table.
+#
+# Calibrated on the ROW-WISE MAX distance, not on each column separately. That
+# distinction matters: the flag asks "is ANY level extremely far", so setting each of the
+# ~15 columns at its own p99.9 makes the union fire ~15x more often. Measured: doing it
+# per-column gave 1.95% of bars, not the intended 0.1%.
+[levels.extreme_distance_atr]
+"1m" = 134.0    # p99.9 of max|dist| across intraday levels
+"5m" = 44.0
+"15m" = 18.0
+"1h" = 9.0
+
+# Cross-session levels (prior day high/low/close) are day-scale, so they are measured in
+# DAILY ATR instead. Measured that way the distribution is stable across every timeframe
+# -- row-wise max p99 2.84, p99.9 4.32-4.34, p99.99 5.69-5.77 on all four -- so one
+# threshold serves them all.
+extreme_distance_daily_atr = 4.3
 
 [costs]
-# Applied on BOTH sides of every backtested trade in phase 3. A strategy that is
-# profitable gross and negative net is a losing strategy.
+# Applied on BOTH sides of every backtested trade. A strategy that is profitable gross
+# and negative net is a losing strategy.
+#
+# THIS IS THE MOST CONSEQUENTIAL NUMBER IN THE WHOLE SYSTEM. Measured on BTC 5m, a
+# 1xATR stop is ~0.13% of price while the base-tier round trip is 2.48% -- so you pay
+# roughly 19x your risk in costs per trade. No pattern edge survives that. Set the tier
+# that matches your real 30-day volume before believing any expectancy number.
+#
+# Coinbase Advanced Trade spot tiers (verified 2026-08), maker / taker:
+#   Intro 1     <$1k      0.60% / 1.20%   <- default here, the honest worst case
+#   Intro 2     >=$1k     0.35% / 0.75%
+#   Advanced 1  >=$10k    0.25% / 0.40%
+#   Advanced 2  >=$50k    0.15% / 0.25%
+#   Advanced 4  >=$1M     0.07% / 0.16%
+#
+# taker_fee_bps assumes market orders. Resting limit orders pay the maker rate instead,
+# which roughly halves the drag -- but they also miss fills, which a backtest that
+# assumes they always fill would silently ignore.
 [costs.default]
-taker_fee_bps = 60.0   # Coinbase Advanced Trade retail taker; conservative
-maker_fee_bps = 40.0
+taker_fee_bps = 120.0
+maker_fee_bps = 60.0
 spread_bps = 2.0
 slippage_bps = 3.0
 

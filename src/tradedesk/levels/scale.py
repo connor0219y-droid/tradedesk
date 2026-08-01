@@ -92,6 +92,37 @@ def _atr_intraday(ctx: LevelContext) -> pl.DataFrame:
     ).drop("_tr_clean", "_sma_seed", "_atr_input")
 
 
+@level(name="ema", kind="rolling", depth=2, outputs=("ema_fast", "ema_slow"))
+def _ema(ctx: LevelContext) -> pl.DataFrame:
+    """Exponential moving averages, reset at every contiguity break.
+
+    Same infinite-memory problem as Wilder's ATR: an EMA spanning a six-hour hole is
+    averaging prices from either side of a gap as though they were adjacent. So it runs
+    .over(run_id) and stays null until a full period of bars has accumulated within the
+    run, rather than emitting a value seeded on one bar.
+    """
+    levels_cfg = getattr(ctx.config, "levels", {}) or {}
+    fast = int(levels_cfg.get("ema_fast", 20))
+    slow = int(levels_cfg.get("ema_slow", 50))
+
+    df = ctx.df.with_columns(
+        pl.int_range(pl.len()).over("run_id").alias("_bar_in_run")
+    )
+    out = []
+    for name, period in (("ema_fast", fast), ("ema_slow", slow)):
+        out.append(
+            pl.when(pl.col("_bar_in_run") < period - 1)
+            .then(None)
+            .otherwise(
+                pl.col("close")
+                .ewm_mean(alpha=2.0 / (period + 1), adjust=False)
+                .over("run_id")
+            )
+            .alias(name)
+        )
+    return df.with_columns(out).drop("_bar_in_run")
+
+
 def daily_atr_frame(
     sessions: pl.DataFrame, *, period: int
 ) -> pl.DataFrame:

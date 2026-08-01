@@ -273,6 +273,42 @@ def levels(
     console.print(table)
 
 
+@app.command()
+def validate(
+    symbol: str = typer.Option(..., "--symbol", help='e.g. "BTC/USD"'),
+    timeframe: str = typer.Option("5m", "--timeframe"),
+    pattern: Optional[str] = typer.Option(None, "--pattern", help="limit to one pattern"),
+    stop_atr: float = typer.Option(1.0, "--stop-atr"),
+    target_r: float = typer.Option(2.0, "--target-r"),
+    max_bars: int = typer.Option(48, "--max-bars", help="bar cap on holding period"),
+    draws: int = typer.Option(1000, "--draws", help="Monte Carlo baseline draws"),
+    detail: bool = typer.Option(False, "--detail", help="per-pattern breakdown"),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Backtest every pattern against a time-of-day-matched random baseline."""
+    from datetime import datetime, timezone
+
+    from .backtest import render, render_detail, validate_series
+
+    cfg = _load(config)
+    con = store.connect(cfg.data.db_path, read_only=True)
+    reports = validate_series(
+        con, cfg, symbol, timeframe,
+        as_of=datetime.now(timezone.utc),
+        patterns=[pattern] if pattern else None,
+        stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
+        baseline_draws=draws,
+    )
+    if not reports:
+        console.print(f"[red]no data[/red] for {symbol} {timeframe}")
+        raise typer.Exit(1)
+
+    render(console, reports)
+    if detail or pattern:
+        for rep in sorted(reports, key=lambda r: -(r.gross_in or -9e9)):
+            render_detail(console, rep)
+
+
 def _fmt(value, digits: int = 2) -> str:
     return "—" if value is None else f"{value:,.{digits}f}"
 

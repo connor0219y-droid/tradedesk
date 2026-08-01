@@ -32,6 +32,7 @@ from .session import add_session_columns, session_valid
 #: Levels computed by default, in declaration order (dependencies resolved separately).
 DEFAULT_LEVELS = [
     "barshape",
+    "ema",
     "bar_return",
     "true_range",
     "atr_intraday",
@@ -42,7 +43,8 @@ DEFAULT_LEVELS = [
     "volume_profile",
 ]
 
-#: Levels a distance-in-ATR column is emitted for.
+#: Intraday-scale levels: measured in INTRADAY ATR, which answers "how many stop-widths
+#: away is this" -- the number that matters when sizing a trade on this timeframe.
 DISTANCE_LEVELS = [
     "vwap",
     "vwap_upper_1s",
@@ -50,8 +52,16 @@ DISTANCE_LEVELS = [
     "vwap_upper_2s",
     "vwap_lower_2s",
     "or5_high", "or5_low", "or15_high", "or15_low", "or30_high", "or30_low",
-    "prior_day_high", "prior_day_low", "prior_day_close",
     "poc",
+]
+
+#: Day-scale levels: measured in DAILY ATR. Measuring a prior-day level against a 1m
+#: ATR gives ~20 units and against a 1h ATR gives ~2, purely because of the ATR's
+#: timescale. In daily ATR the distribution is identical across every timeframe
+#: (p50 0.35 on all four), which is what makes the number comparable and the threshold
+#: meaningful.
+DAILY_DISTANCE_LEVELS = [
+    "prior_day_high", "prior_day_low", "prior_day_close",
 ]
 
 #: Auxiliary columns the engine adds but never masks -- they are bookkeeping, always
@@ -161,6 +171,7 @@ def compute_levels(
         )
 
     ctx.df = _add_distances(ctx.df)
+    ctx.df = extreme_distance_flags(ctx.df, cfg, bf.timeframe)
     assert_total(ctx.df, context=f"{bf.symbol} {bf.timeframe}")
     return LevelFrame(ctx.df, bf.symbol, bf.timeframe, bf.as_of_ms, tuple(names))
 
@@ -168,8 +179,39 @@ def compute_levels(
 def _add_distances(df: pl.DataFrame) -> pl.DataFrame:
     price = pl.col("close")
     exprs = [
-        distance_in_atr(price, name).alias(f"dist_{name}_atr")
+        distance_in_atr(price, name, "atr_intraday").alias(f"dist_{name}_atr")
         for name in DISTANCE_LEVELS
         if name in df.columns
     ]
+    exprs += [
+        distance_in_atr(price, name, "atr_daily").alias(f"dist_{name}_datr")
+        for name in DAILY_DISTANCE_LEVELS
+        if name in df.columns and "atr_daily" in df.columns
+    ]
     return df.with_columns(exprs) if exprs else df
+
+
+def extreme_distance_flags(
+    df: pl.DataFrame, cfg: Config, timeframe: str
+) -> pl.DataFrame:
+    """Bars whose distance to some level is beyond the calibrated threshold.
+
+    Flagged, never capped: a tiny-but-positive ATR yields a large FINITE distance, which
+    is honest. Capping would fabricate a value. Phase 3 filters on this rather than the
+    engine hiding it.
+    """
+    thresholds = cfg.levels.get("extreme_distance_atr", {})
+    intra = float(thresholds.get(timeframe, 25.0)) if isinstance(thresholds, dict) else float(thresholds)
+    daily = float(cfg.levels.get("extreme_distance_daily_atr", 4.0))
+
+    intra_cols = [f"dist_{n}_atr" for n in DISTANCE_LEVELS if f"dist_{n}_atr" in df.columns]
+    daily_cols = [f"dist_{n}_datr" for n in DAILY_DISTANCE_LEVELS if f"dist_{n}_datr" in df.columns]
+    if not intra_cols and not daily_cols:
+        return df.with_columns(pl.lit(False).alias("extreme_distance"))
+
+    conds = [pl.col(c).abs() > intra for c in intra_cols]
+    conds += [pl.col(c).abs() > daily for c in daily_cols]
+    combined = conds[0]
+    for c in conds[1:]:
+        combined = combined | c
+    return df.with_columns(combined.fill_null(False).alias("extreme_distance"))
