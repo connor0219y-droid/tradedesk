@@ -36,6 +36,19 @@ def _load(config_path: Optional[Path]):
     return load_config(config_path)
 
 
+def _parse_until(until: Optional[str]) -> Optional[int]:
+    if until is None:
+        return None
+    from datetime import datetime, timezone
+
+    from .timeutil import to_ms
+
+    parsed = datetime.fromisoformat(until.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return to_ms(parsed)
+
+
 def _venue(cfg):
     return CoinbaseVenue(
         max_bars_per_request=cfg.venue.max_bars_per_request,
@@ -60,6 +73,14 @@ def fetch(
     config: Optional[Path] = typer.Option(None, "--config"),
     symbol: Optional[str] = typer.Option(None, "--symbol", help="limit to one symbol"),
     timeframe: Optional[str] = typer.Option(None, "--timeframe"),
+    until: Optional[str] = typer.Option(
+        None,
+        "--until",
+        help=(
+            "ISO-8601 UTC upper bound, e.g. 2026-07-01T00:00:00Z. Pins the target end "
+            "so a backfill is reproducible instead of drifting with wall clock."
+        ),
+    ),
 ) -> None:
     """Backfill missing candles. Idempotent -- safe to interrupt and re-run."""
     cfg = _load(config)
@@ -69,6 +90,7 @@ def fetch(
 
     symbols = [symbol] if symbol else cfg.data.symbols
     timeframes = [timeframe] if timeframe else cfg.data.timeframes
+    until_ms = _parse_until(until)
 
     total_inserted = 0
     with Progress(
@@ -82,6 +104,8 @@ def fetch(
         for sym in symbols:
             for tf in timeframes:
                 start_ms, end_ms = target_range_ms(cfg, tf)
+                if until_ms is not None:
+                    end_ms = min(end_ms, until_ms)
                 task = progress.add_task(f"{sym} {tf}", total=None)
 
                 def on_progress(stats, _window, _task=task, _progress=progress):

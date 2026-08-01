@@ -60,6 +60,7 @@ class QualityConfig:
     min_coverage_pct: float
     absent_pct_warn: float
     absent_pct_block: float
+    outage_minutes: float
     outlier_mad_k: float
     sigma_floor_bps: float
     outlier_abs_return: float

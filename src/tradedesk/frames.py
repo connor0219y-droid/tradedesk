@@ -80,16 +80,12 @@ class BarFrame:
         if n == 1:
             return pl.Series("window_ok", [True] * self.df.height)
         # A window is valid when none of its bars after the first opened a gap.
-        breaks = (
-            gaps.to_frame("gap")
-            .with_columns(
-                pl.col("gap")
-                .cast(pl.Int32)
-                .rolling_sum(window_size=n - 1, min_samples=n - 1)
-                .alias("breaks")
-            )["breaks"]
-            .shift(0)
-        )
+        breaks = gaps.to_frame("gap").with_columns(
+            pl.col("gap")
+            .cast(pl.Int32)
+            .rolling_sum(window_size=n - 1, min_samples=n - 1)
+            .alias("breaks")
+        )["breaks"]
         ok = (breaks == 0).fill_null(False)
         # The first n-1 rows have no complete history behind them.
         idx = pl.int_range(0, self.df.height, eager=True)

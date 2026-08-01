@@ -126,6 +126,59 @@ def test_absent_bars_are_split_into_no_trades_and_unknown():
     assert unknown == 3     # bars 5, 6, 7: never requested
 
 
+def test_absent_runs_separate_outages_from_quiet_markets():
+    """A percentage hides the difference between quiet and broken.
+
+    Isolated absent bars are a quiet market. A contiguous run of them on a liquid
+    instrument is venue downtime -- BTC/USD does not go five hours without a trade.
+    The real 4-year 1h backfill contained exactly three such runs (3, 5 and 5 bars).
+    """
+    from tradedesk.quality.checks import absent_runs
+
+    covered = [(BASE, BASE + 20 * STEP)]
+    target = (BASE, BASE + 20 * STEP)
+    # Absent: an isolated bar at 3, and a run of 5 spanning 10-14.
+    present = {
+        BASE + i * STEP for i in range(20) if i != 3 and not (10 <= i <= 14)
+    }
+    runs = absent_runs(present, covered, target, "5m")
+    assert sorted(n for _, n in runs) == [1, 5]
+    longest_start = max(runs, key=lambda r: r[1])[0]
+    assert longest_start == BASE + 10 * STEP
+
+
+def test_outage_threshold_is_a_duration_not_a_bar_count():
+    """The same real outage must be classified identically at every timeframe.
+
+    A fixed bar count cannot do that: 3 absent bars is 3 minutes at 1m -- an ordinary
+    quiet stretch, and SOL/USD has 3,434 of them over 4 years -- but 45 minutes at
+    15m, which is unambiguously venue downtime.
+    """
+    from tradedesk.quality.report import outage_threshold_bars
+
+    assert outage_threshold_bars("1m", 30) == 30
+    assert outage_threshold_bars("5m", 30) == 6
+    assert outage_threshold_bars("15m", 30) == 2
+    assert outage_threshold_bars("1h", 30) == 1  # never rounds down to zero
+
+    # A 40-minute outage is flagged at every timeframe that can represent it.
+    for tf, bars in (("1m", 40), ("5m", 8), ("15m", 3)):
+        assert bars >= outage_threshold_bars(tf, 30), tf
+    # A 3-minute gap is flagged at none of them.
+    for tf, bars in (("1m", 3), ("5m", 1)):
+        assert bars < outage_threshold_bars(tf, 30), tf
+
+
+def test_absent_runs_ignores_uncovered_territory():
+    """Bars we never requested are UNKNOWN, not an outage."""
+    from tradedesk.quality.checks import absent_runs
+
+    covered = [(BASE, BASE + 5 * STEP)]
+    target = (BASE, BASE + 20 * STEP)
+    present = {BASE + i * STEP for i in range(5)}
+    assert absent_runs(present, covered, target, "5m") == []
+
+
 def test_offline_checks_detect_a_reverting_bad_tick():
     """A spike that fully reverses next bar. Detecting it requires hindsight."""
     rows = [[BASE + i * STEP, 100.0, 101.0, 99.0, 100.0, 10.0] for i in range(60)]

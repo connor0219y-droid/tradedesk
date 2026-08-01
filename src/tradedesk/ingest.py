@@ -9,6 +9,7 @@ does not land at all.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, time as dtime
 
 import duckdb
 import polars as pl
@@ -19,10 +20,12 @@ from .quality import checks
 from .store import insert_bars, record_quality_issues, transaction
 from .timeutil import (
     ET_NAME,
+    UTC,
     is_bar_final,
     now_ms,
     readable_watermark,
     tf_ms,
+    to_ms,
 )
 from .venues.base import Venue
 
@@ -225,10 +228,6 @@ def ingest(
 
 def target_range_ms(cfg: Config, timeframe: str, now: int | None = None) -> tuple[int, int]:
     """The full range the config asks us to hold for a timeframe."""
-    from datetime import datetime, time as dtime
-
-    from .timeutil import UTC, readable_watermark, to_ms
-
     now = now if now is not None else now_ms()
     start = to_ms(datetime.combine(cfg.data.history_start, dtime(0, 0), tzinfo=UTC))
     return start, readable_watermark(timeframe, now, cfg.venue.settle_ms)

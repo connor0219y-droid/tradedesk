@@ -18,12 +18,20 @@ from ..config import Config
 from ..coverage import covered_intervals
 from ..store import read_bars_raw
 from ..timeutil import ET_NAME, expected_bar_count, from_ms
+from ..timeutil import tf_ms as _tf_ms
 from .checks import absent_runs, classify_absent_bars
 
-# A run of absent bars this long stops being "the market was quiet" and starts being
-# "the venue was down". Tuned against the real backfill, where BTC/USD 1h showed
-# runs of 3, 5 and 5 hours -- BTC does not go five hours without a trade.
-OUTAGE_RUN_BARS = 3
+
+def outage_threshold_bars(timeframe: str, outage_minutes: float) -> int:
+    """How many consecutive absent bars constitute venue downtime at this timeframe.
+
+    Expressed as a duration rather than a bar count so the same real outage is
+    classified identically at 1m, 5m and 15m. A fixed bar count cannot do that: three
+    absent bars is 3 minutes at 1m (an ordinary quiet stretch on SOL, which has 3,434
+    of them) and 45 minutes at 15m (unambiguously downtime).
+    """
+    step_minutes = _tf_ms(timeframe) / 60_000
+    return max(1, int(-(-outage_minutes // step_minutes)))  # ceil
 
 _SPARK = "▁▂▃▄▅▆▇█"
 
@@ -106,14 +114,17 @@ def assess(
     runs = absent_runs(
         present_ms, covered, (target_start_ms, target_end_ms), timeframe
     )
-    outages = [r for r in runs if r[1] >= OUTAGE_RUN_BARS]
+    min_bars = outage_threshold_bars(timeframe, cfg.quality.outage_minutes)
+    outages = [r for r in runs if r[1] >= min_bars]
     longest = max((n for _, n in runs), default=0)
 
     verdict, reasons = _verdict(cfg, expected, coverage_pct, absent_pct, issues)
     if outages:
+        step_minutes = _tf_ms(timeframe) / 60_000
+        worst = max(n for _, n in outages) * step_minutes
         reasons.append(
-            f"{len(outages)} venue-outage run(s), longest {longest} bars -- "
-            "these are downtime, not quiet markets"
+            f"{len(outages)} venue-outage run(s) of >={cfg.quality.outage_minutes:.0f}m, "
+            f"longest {worst:.0f}m -- downtime, not quiet markets"
         )
 
     return SymbolQuality(
@@ -256,12 +267,17 @@ def _render_one(
         console.print(span)
 
     if res.outages:
+        step_minutes = _tf_ms(res.timeframe) / 60_000
         table = Table(title="venue outages (contiguous absent runs)", box=None,
                       header_style="bold", title_justify="left", pad_edge=False)
         table.add_column("from (UTC)")
         table.add_column("bars", justify="right")
+        table.add_column("duration", justify="right")
         for start_ms, n in res.outages[:10]:
-            table.add_row(f"{from_ms(start_ms):%Y-%m-%d %H:%M}", str(n))
+            table.add_row(
+                f"{from_ms(start_ms):%Y-%m-%d %H:%M}", str(n),
+                f"{n * step_minutes:.0f}m",
+            )
         if len(res.outages) > 10:
             table.add_row(f"... {len(res.outages) - 10} more", "")
         console.print(table)

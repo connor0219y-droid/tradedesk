@@ -54,6 +54,16 @@ min_coverage_pct = 99.0
 #   BTC-USD 145, SOL-USD 145, ALEPH-USD 143, ACS-USD 78, AERGO-USD 72.
 absent_pct_warn = 5.0
 absent_pct_block = 20.0
+# A contiguous absence at least this long is venue downtime rather than a quiet
+# market, and is reported separately. Expressed in MINUTES, not bars, because the
+# same real-world outage must be classified identically at 1m, 5m and 15m.
+#
+# Calibrated against the 4-year backfill: absent-run durations fall into two clearly
+# separated populations. Below 15 min sit 3,434 single-minute SOL gaps (a genuinely
+# quiet book). At/above 30 min sit exactly 6-7 events per symbol, which appear
+# simultaneously across BTC, ETH and SOL with matching durations -- unambiguously
+# Coinbase downtime. Only 13 runs across all nine series land in the 15-30 min band.
+outage_minutes = 30
 # Robust outlier detection on log returns: MAD * 1.4826 is the Fisher-consistency
 # constant making MAD a consistent estimator of sigma under a Gaussian reference.
 outlier_mad_k = 8.0
