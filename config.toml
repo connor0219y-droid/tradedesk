@@ -142,7 +142,10 @@ spread_bps = 4.0
 slippage_bps = 5.0
 
 [risk]
-account_size = 10000.0
+# PLACEHOLDER -- set this to your own account size before using the position-size
+# calculator. Nothing in the research path reads it; expectancy is measured in R, which
+# is account-size independent by construction.
+account_size = 100000.0
 risk_pct = 1.0
 max_risk_pct = 2.0
 default_stop_atr = 1.0
