@@ -556,3 +556,167 @@ def journal_report(
             Text(d.reading, style="yellow" if "EXECUTION" in d.reading else "dim"),
         )
     console.print(dt)
+
+
+@journal_app.command("score")
+def journal_score(
+    symbol: Optional[str] = typer.Option(None, "--symbol"),
+    timeframe: Optional[str] = typer.Option(None, "--timeframe"),
+    target_r: float = typer.Option(2.0, "--target-r", help="target as a multiple of your stop"),
+    max_bars: int = typer.Option(48, "--max-bars", help="horizon; also the gradeability rule"),
+    show_all: bool = typer.Option(
+        False, "--all", help="list every graded prediction, not just the last 20"
+    ),
+    config: Optional[Path] = typer.Option(None, "--config"),
+) -> None:
+    """Grade your predict-first reads against what price actually did."""
+    from datetime import datetime, timezone
+
+    from . import predictions as pr
+    from .timeutil import ET
+
+    cfg = _load(config)
+    con = store.connect(cfg.data.db_path)
+    store.init_schema(con)
+
+    preds = pr.load_predictions(con, symbol=symbol, timeframe=timeframe)
+    if not preds:
+        console.print(
+            "[dim]no predictions recorded — `tradedesk live` asks for your read "
+            "before it shows you anything, and stores it here[/dim]"
+        )
+        return
+
+    rep = pr.grade(
+        con, cfg, preds, as_of=datetime.now(timezone.utc),
+        target_r=target_r, max_bars=max_bars,
+    )
+
+    console.print(
+        f"[bold cyan]predict-first scorecard[/bold cyan] · {len(preds):,} recorded · "
+        f"{len(rep.graded):,} graded · {rep.n_pending:,} pending"
+    )
+    console.print(
+        f"[dim]entry at the next bar's open, your stated stop, target {rep.target_r:g}R, "
+        f"{rep.max_bars}-bar horizon, {rep.round_trip_bps:.0f} bps round trip — "
+        "the same rules the backtest uses[/dim]"
+    )
+
+    # --- every graded read, as an observation rather than a statistic -----------
+    if rep.graded:
+        shown = rep.graded if show_all else rep.graded[-20:]
+        console.print()
+        gt = Table(title=f"graded reads{'' if show_all else ' (most recent 20)'}",
+                   box=None, header_style="bold", title_justify="left", pad_edge=False)
+        left = ("said", "exit", "ok", "your note")
+        for c in ("bar (ET)", "said", "your stop", "exit", "gross", "net", "ok",
+                  "your note"):
+            gt.add_column(
+                c, justify="left" if c in left else "right", no_wrap=True,
+                # Your own reasoning belongs on the row, but it is free text and would
+                # wrap the numbers off the screen if it were allowed to.
+                max_width=18 if c == "your note" else None,
+                overflow="ellipsis",
+            )
+        for g in shown:
+            gt.add_row(
+                f"{from_ms(g.prediction.bar_open_ms).astimezone(ET):%m-%d %H:%M}",
+                g.prediction.direction,
+                f"{g.stop:,.2f}",
+                g.exit_reason,
+                Text(f"{g.r_gross:+.2f}R", style="green" if g.r_gross > 0 else "red"),
+                Text(f"{g.r_net:+.2f}R", style="green" if g.r_net > 0 else "red"),
+                Text("✓" if g.direction_correct else "✗",
+                     style="green" if g.direction_correct else "red"),
+                Text(g.prediction.note or "—", style="dim"),
+            )
+        console.print(gt)
+        console.print(
+            f"[dim]ok = price was on your side at the {rep.max_bars}-bar horizon. A read "
+            "can be ✓ on a trade that still stopped out — that gap is your stop, not "
+            "your eye. gross is before costs, net is after.[/dim]"
+        )
+
+    # --- the two numbers, kept apart -------------------------------------------
+    console.print()
+    acc = rep.direction_accuracy()
+    horizon, gross, net = rep.horizon(), rep.gross(), rep.net()
+
+    st = Table(title="what your reads were worth", box=None, header_style="bold",
+               title_justify="left", pad_edge=False)
+    st.add_column("question"); st.add_column("answer", justify="right")
+    st.add_column("n", justify="right"); st.add_column("", justify="left")
+
+    if acc is None:
+        st.add_row(
+            "were you right about direction?",
+            Text("REFUSED", style="yellow"), f"{len(rep.graded):,}",
+            Text(f"under the {rep.min_n}-prediction minimum — "
+                 f"{rep.n_correct} of {len(rep.graded)} so far, which is not a rate",
+                 style="dim"),
+        )
+    else:
+        st.add_row(
+            "were you right about direction?", f"{acc:.1%}", f"{len(rep.graded):,}",
+            Text(f"{rep.n_correct} of {len(rep.graded)} moved your way by the horizon",
+                 style="dim"),
+        )
+    for label, s, note in (
+        ("how far, in your own R?", horizon,
+         "signed move at the horizon — no stop, no costs"),
+        ("would the trade have worked?", gross, "your stop and target, before costs"),
+        ("would it have made money?", net, f"after {rep.round_trip_bps:.0f} bps"),
+    ):
+        if not s.shown:
+            st.add_row(label, Text("REFUSED", style="yellow"), f"{s.n:,}",
+                       Text(f"n below the {rep.min_n} minimum", style="dim"))
+            continue
+        st.add_row(
+            label,
+            Text(f"{s.expectancy_r:+.3f}R",
+                 style="green" if s.expectancy_r > 0 else "red"),
+            f"{s.n:,}",
+            Text(f"95% CI {s.ci_low:+.2f} … {s.ci_high:+.2f}"
+                 + ("  PROVISIONAL" if s.reliability == "PROVISIONAL" else "")
+                 + f" · {note}", style="dim"),
+        )
+    console.print(st)
+
+    # Two different diagnoses, both gated behind the sample minimum. Naming which one
+    # applies is the entire value of keeping the numbers apart.
+    if gross.shown and net.shown and gross.expectancy_r > 0 >= net.expectancy_r:
+        console.print()
+        console.print(
+            Text(
+                "Your setups worked and the trades still lost money. The gap between "
+                f"those two rows is the {rep.round_trip_bps:.0f} bps round trip, not "
+                "your eye and not your stop.",
+                style="bold yellow",
+            )
+        )
+    elif acc is not None and acc > 0.5 and gross.shown and gross.expectancy_r <= 0:
+        console.print()
+        console.print(
+            Text(
+                f"You read direction right {acc:.0%} of the time and still lost before "
+                "costs. Price came back your way by the horizon but took your stop "
+                "first — that is stop placement, not your eye.",
+                style="bold yellow",
+            )
+        )
+
+    # --- what could not be graded, and why -------------------------------------
+    if rep.ungraded:
+        console.print()
+        ut = Table(title="not graded", box=None, header_style="bold",
+                   title_justify="left", pad_edge=False)
+        ut.add_column("bar (ET)"); ut.add_column("you said"); ut.add_column("why")
+        for u in rep.ungraded[-20:]:
+            ut.add_row(
+                f"{from_ms(u.prediction.bar_open_ms).astimezone(ET):%m-%d %H:%M}",
+                u.prediction.direction,
+                Text(u.reason, style="cyan" if u.pending else "dim"),
+            )
+        console.print(ut)
+        if len(rep.ungraded) > 20:
+            console.print(f"[dim]…{len(rep.ungraded) - 20} more[/dim]")

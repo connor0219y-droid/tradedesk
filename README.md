@@ -133,6 +133,7 @@ Three commands. That's the whole routine.
 | `make brief` | before you trade | One screen that answers "is today worth trading, and what has earned the right to be traded?" It shows how volatile the instrument is right now, every price level worth watching, what a round trip costs you, and which setups passed the gate. |
 | `make live` | while you're watching | Asks for your read *first*, then shows where price sits relative to those levels and whether any pattern fired on the last closed bar. It only tells you to take a trade if a setup passed the gate. |
 | `make journal` | after | Compares the trades you actually took against what the backtest said to expect. This is the part that tells you whether your problem is the setup or your execution of it. |
+| `make score` | after | Grades the predict-first reads `make live` recorded against what price actually did. Works even if you never place a trade. |
 
 `make brief` covers all three configured symbols. `make live` follows one instrument —
 BTC/USD 5m as configured in the `Makefile`.
@@ -374,12 +375,81 @@ positive and your executed version of it did not — in which case the problem i
 timing, stop placement, or discipline, and the fix is you rather than the setup. A
 single blended P&L number cannot tell those apart. This one localises the problem.
 
-> **`tradedesk journal score` does not exist yet.** After `make live` records your
-> prediction it prints "recorded — `tradedesk journal score` compares it to outcomes",
-> but that command is not implemented: predictions are written to the `predictions`
-> table and nothing currently reads them. The journal's live-vs-backtest report above is
-> real and works today; scoring your *predictions* against what the bar actually did is
-> not built. Don't go looking for it.
+### `make score` — grading your own reads
+
+`make journal` scores the trades you took. **`make score` scores the trades you didn't**
+— every predict-first read that `make live` recorded, replayed against what price
+actually did. You don't have to place a single order for this to start teaching you
+something, which makes it the fastest feedback loop in the tool.
+
+Each read is replayed through the backtest's own rules: entry at the next bar's open,
+your stated stop as the risk unit, a 2R target, a 48-bar horizon, and costs at your fee
+tier. Using the same machinery is the point — "your expectancy" and "the backtested
+expectancy" have to be the same measurement or comparing them is meaningless.
+
+Here are the two reads from the session above, graded:
+
+```
+predict-first scorecard · 2 recorded · 2 graded · 0 pending
+entry at the next bar's open, your stated stop, target 2R, 48-bar horizon, 248
+bps round trip — the same rules the backtest uses
+
+graded reads (most recent 20)
+   bar (ET)  said  your stop  exit   gross      net  ok  your note
+08-01 00:45  long  62,928.00  stop  -1.00R  -17.05R  ✓   price holding abo…
+08-01 00:45  long  62,980.00  stop  -1.00R  -35.50R  ✓   reclaim of VWAP a…
+ok = price was on your side at the 48-bar horizon. A read can be ✓ on a trade
+that still stopped out — that gap is your stop, not your eye. gross is before
+costs, net is after.
+
+what your reads were worth
+question                          answer  n
+were you right about direction?  REFUSED  2  under the 30-prediction minimum — 2
+                                             of 2 so far, which is not a rate
+how far, in your own R?          REFUSED  2  n below the 30 minimum
+would the trade have worked?     REFUSED  2  n below the 30 minimum
+would it have made money?        REFUSED  2  n below the 30 minimum
+```
+
+Read the first row across and you get the whole argument of this project in one line.
+**The direction call was right** — four hours later price was above the entry, so the
+`ok` column is a tick. **The trade still lost**, because the stop at 62,928 was taken
+before price came back. And **the loss was 17× worse than the trade itself**: −1.00R
+became −17.05R once the 248 bps round trip was charged.
+
+The second row is the same read with a tighter stop, and it is worse in exactly the way
+the cost drag predicts. A stop 45 away instead of 97 makes 1R smaller, so the same fixed
+fee is a bigger multiple of it: −35.50R instead of −17.05R. Being right about direction
+did not save either one.
+
+That is why the report is **three questions, never collapsed into a score**:
+
+| the question | what it isolates |
+|---|---|
+| *were you right about direction?* | your read alone — measured at the horizon, ignoring your stop and ignoring costs |
+| *would the trade have worked?* | your read **plus** your stop placement, gross |
+| *would it have made money?* | all of that **plus** what your fee tier takes |
+
+A single number cannot distinguish "you can't read the chart" from "you can read it fine
+and your stop is too tight" from "both were fine and the fees ate it". Those need three
+different responses, so they get three different rows.
+
+**Everything says REFUSED here because n=2.** The same rule that governs every other
+base rate in this tool applies to you: nothing under n=30 is shown as a rate, because a
+2-from-2 hit rate is not evidence that you can read a chart. The individual reads are
+still listed — those are observations, and an observation is not an inference. Keep
+using `make live` and the rows accumulate until the gate opens.
+
+Two more things it refuses to do:
+
+- **A read whose horizon has not closed is `pending`, not scored.** Grading whatever
+  bars happen to exist would score fast resolutions early and slow ones late, biasing
+  the sample toward whatever resolves quickest. Run `make score` on a prediction you
+  made ten minutes ago and it will tell you how many bars are left to run.
+- **A read it cannot grade is listed with the reason**, never dropped — `stood aside`,
+  `no stop stated`, a stop on the wrong side of the entry, or an entry bar that sat
+  across a data gap. A scorecard that silently discards the reads it can't handle
+  flatters you by construction.
 
 ### Why NO QUALIFYING SETUPS is the correct output
 
@@ -419,6 +489,7 @@ The three `make` targets above cover the daily routine. Underneath, each is a
 | `tradedesk size --entry --stop --thesis [--account --risk-pct]` | position size; refuses without a thesis |
 | `tradedesk journal add --symbol --direction --entry --stop --thesis [...]` | log a trade |
 | `tradedesk journal report [--symbol]` | rolling stats, behavioural flags, live vs backtest |
+| `tradedesk journal score [--symbol --timeframe --target-r --max-bars --all]` | grade your predict-first reads against what price did |
 | `tradedesk status` | what the store holds |
 
 [`uv`](https://docs.astral.sh/uv/) is the only prerequisite; it pins its own Python 3.12.
@@ -658,10 +729,11 @@ notes in [FINDINGS.md](FINDINGS.md).
 **TradingView fills are not read automatically.** There's no public API for it, and
 scraping it is out of scope by design. Log trades with `tradedesk journal add`.
 
-**Predictions are recorded but never scored.** `tradedesk live` writes your predict-first
-read to the `predictions` table, and then points at a `tradedesk journal score` command
-that does not exist — nothing reads that table yet. The dangling string is in
-`live.py`; either the command gets built or the message should stop promising it.
+**Predictions are graded against price, not against a null.** `tradedesk journal score`
+replays each recorded read through the backtest's entry, exit and cost rules, but it
+does not yet compare your hit rate to a random-direction baseline the way `validate`
+compares a pattern to random entries. Until it does, a direction accuracy near 50% on a
+coin-flip instrument should be read as "no evidence either way", not as a score.
 
 **Alerts are local only** — terminal bell and macOS notification centre. `notify.py` has
 no HTTP client at all; not disabled, absent. A trading tool that phones home leaks your

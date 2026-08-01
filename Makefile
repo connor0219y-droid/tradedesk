@@ -1,7 +1,7 @@
 # tradedesk -- common commands
 # `just` is not installed on this machine, so this is a Makefile. GNU Make 3.81 (macOS).
 
-.PHONY: help setup test fetch fetch-5m quality status clean check levels levels-sweep validate brief live journal
+.PHONY: help setup test fetch fetch-5m quality status clean check levels levels-sweep validate brief live journal score
 
 help:
 	@echo "setup     install dependencies and create the store"
@@ -15,6 +15,7 @@ help:
 	@echo "brief     pre-session brief: regime, levels, validated setups, cost drag"
 	@echo "live      live companion (signal cards only for setups that passed the gate)"
 	@echo "journal   trade journal report"
+	@echo "score     grade your predict-first reads against what price did"
 	@echo "status    show what the store currently holds"
 	@echo "check     test + quality, the pre-flight before trusting a result"
 	@echo "clean     delete the candle store (destructive)"
@@ -55,6 +56,9 @@ live:
 
 journal:
 	uv run tradedesk journal report
+
+score:
+	uv run tradedesk journal score
 
 check: test levels-sweep quality
 
