@@ -89,6 +89,7 @@ def validate_series(
     baseline_draws: int = 200,
     bootstrap_iterations: int = 2000,
     use_intrabar: bool = True,
+    costs: CostModel | None = None,
 ) -> list[PatternReport]:
     bf = read_bars(con, symbol, timeframe, as_of=as_of, venue=cfg.venue.name)
     if bf.is_empty:
@@ -101,7 +102,7 @@ def validate_series(
         if not m1.is_empty:
             resolver = IntrabarResolver.from_frame(m1.to_polars())
 
-    costs = CostModel.for_symbol(cfg, symbol)
+    costs = costs or CostModel.for_symbol(cfg, symbol)
     bt = BacktestConfig(stop_atr=stop_atr, target_r=target_r, max_bars=max_bars)
     split = make_split(df, in_sample_pct=float(cfg.backtest.get("in_sample_pct", 70)))
     min_n = int(cfg.backtest.get("min_sample_size", 30))

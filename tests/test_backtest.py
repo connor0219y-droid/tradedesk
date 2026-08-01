@@ -234,6 +234,59 @@ def test_intrabar_resolver_can_overturn_the_pessimistic_default():
     assert res.trades[0].r_gross == pytest.approx(2.0)
 
 
+def test_cost_model_handles_a_maker_rebate():
+    """A negative fee must IMPROVE the fill, not silently flip a sign somewhere.
+
+    Rebate venues pay you to add liquidity, so per-side cost can be negative. This was
+    used to produce a rebate column in FINDINGS.md before any test covered it -- which
+    is the same species of mistake as assuming a fee tier you cannot actually get.
+    """
+    rebate = CostModel(spread_bps=0.2, slippage_bps=0.2, taker_fee_bps=-0.7)
+    assert rebate.per_side_bps == pytest.approx(0.2 / 2 + 0.2 - 0.7)
+    assert rebate.per_side_bps < 0, "rebate did not produce a negative per-side cost"
+
+    # A long entry under a rebate fills BELOW mid, not above.
+    mid = 100.0
+    assert rebate.fill_price(mid, is_long=True, is_entry=True) < mid
+    # ...and the exit fills above mid.
+    assert rebate.fill_price(mid, is_long=True, is_entry=False) > mid
+    # Mirrored for shorts.
+    assert rebate.fill_price(mid, is_long=False, is_entry=True) > mid
+    assert rebate.fill_price(mid, is_long=False, is_entry=False) < mid
+
+    # round_trip_in_r goes negative: the round trip pays rather than costs.
+    assert rebate.round_trip_in_r(entry=100.0, stop=99.0) < 0
+
+
+def test_rebate_makes_a_zero_edge_strategy_positive():
+    """The mirror of the cost-sanity test, and the reason it needs to exist.
+
+    If costs correctly turn zero gross edge negative, a rebate must correctly turn it
+    positive by a comparable magnitude. A model that clamps at zero, or applies the
+    rebate to only one side, would pass the cost test and quietly understate the rebate.
+    """
+    df = random_walk_frame(20_000)
+    sig = _every_nth_signal(df.height)
+    bt = BacktestConfig(stop_atr=1.0, target_r=1.0, max_bars=200)
+
+    free = run_backtest(df, sig, is_long=True, timeframe="5m", costs=NO_COST, bt=bt)
+    gross = sum(t.r_net for t in free.trades) / free.n
+    assert abs(gross) < 0.05
+
+    rebated = run_backtest(
+        df, sig, is_long=True, timeframe="5m",
+        costs=CostModel(spread_bps=0.0, slippage_bps=0.0, taker_fee_bps=-1.0), bt=bt,
+    )
+    net = sum(t.r_net for t in rebated.trades) / rebated.n
+    assert net > gross, f"rebate did not improve expectancy: {gross:+.4f} -> {net:+.4f}"
+
+    # And it must be applied on BOTH sides: a one-sided bug halves the effect.
+    one_side_only = 1.0 * 1e-4 * df["close"].median() / (1.0 * 10.0)
+    assert net - gross > 1.5 * one_side_only, (
+        "rebate appears to be applied on only one side of the trade"
+    )
+
+
 def test_sample_size_gates():
     """n<30 shows nothing at all; n<100 is labelled provisional."""
     assert compute([0.1] * 29, bootstrap_iterations=50).reliability == "REFUSED"

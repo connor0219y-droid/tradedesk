@@ -94,13 +94,89 @@ the edge *faster* — on 5m, gross falls 34× (+0.119R → +0.0035R) while maker
 only 3.8×. The best ratio achieved anywhere is ~0.18, meaning roughly **5× more edge**
 would be needed than the strongest effect measured.
 
+## 5. Lower-fee venues: what is actually obtainable, and it still does not clear
+
+### The fee schedules, verified rather than assumed
+
+A 10 bps assumption turned out to be unobtainable. Base-tier US-accessible spot fees:
+
+| venue | maker | taker | maker-maker round trip | US access |
+|---|---|---|---|---|
+| Coinbase Advanced | 0.60% | 1.20% | 240 bps | yes |
+| Kraken Pro | 0.25% | 0.40% | 50 bps | yes |
+| **OKX US** | **0.20%** | **0.35%** | **40 bps** | yes, except NY/TX/NV |
+| Gemini ActiveTrader | ~0.20% | ~0.40% | ~40 bps | yes |
+
+**Maker rebates require OKX VIP 7+**, i.e. very high volume. Not obtainable at retail size.
+The realistic floor is **~40 bps**, not 10 — a 6× improvement over Coinbase base, against a
+measured shortfall of ~5×. Close enough to be worth testing, not close enough to assume.
+
+**Global OKX is not the same venue as OKX US.** Phase 1 probed `www.okx.com` and got HTTP
+200 for market data, but the global platform blocks US users for *trading*. Public data
+access is not trading access.
+
+### Execution quality: thin 24h volume, but tight books at retail size
+
+| venue | 24h notional | top-of-book spread | cost to fill $9,000 |
+|---|---|---|---|
+| Coinbase | $215M | — | — |
+| Kraken | $37M | 0.02 bps | 0.00 bps |
+| OKX US | $7.7M | 0.02 bps | 0.40 bps |
+| Gemini | $4.4M | 0.00 bps | 0.00 bps |
+
+Thin 24h volume does **not** translate into bad execution at a $9k position — spreads are
+tight and the books are deep enough. Thinness hurts *data quality*, not fills at this size.
+
+### Why the venue switch was not worth a backfill
+
+Comparing 299 overlapping 5m bars, Coinbase vs OKX US:
+
+- closes track within **2.1 bps median** (the venues are arbitraged)
+- but OKX US has **22/299 zero-range bars (7.4%) against Coinbase's 0**, plus 51 missing bars
+- and OKX US has **no data before 2025-08-01** — it launched in 2025, so ~1 year, not 4
+
+Every candlestick detector reads bar *shape*. A venue with 7.4% zero-range bars has a
+materially different pattern population from the same underlying market, so Phase 1's rule
+("measure the venue you trade") is not satisfied by using Coinbase bars as a proxy.
+
+### The upper-bound test
+
+Rather than backfill a shorter, dirtier history, the design was inverted: pair Coinbase's
+clean 4-year bars with OKX US's fee schedule. That is deliberately optimistic — best
+available data quality AND best obtainable fees, a combination no real venue offers. If
+nothing clears there, nothing clears on a thinner venue with a quarter the history.
+
+**All 20 patterns, Monte Carlo null (1,000 draws), BH correction, 70/30 split:**
+
+| config | round trip | positive net | survive BH |
+|---|---|---|---|
+| 5m 8×ATR | 40 bps | 0 / 20 | 0 |
+| 5m 8×ATR | 70 bps | 0 / 20 | 0 |
+| 15m 8×ATR | 40 bps | 0 / 20 | 0 |
+| 15m 32×ATR | 40 bps | 0 / 20 | 0 |
+| 1h 16×ATR | 40 bps | 0 / 16 | 0 |
+| 1h 32×ATR | 40 bps | 0 / 16 | 0 |
+
+At 40 bps, **not one pattern reaches even raw p < 0.05** — fewer than the ~1.0 chance alone
+produces.
+
+### The structural reason the two never meet
+
+Section 4 showed edge decays faster than drag as stops widen. Section 5 shows the
+consequence: **the configurations where drag is small enough to matter are exactly the
+configurations where the edge has already decayed to nothing.** They do not overlap. At
+1×ATR the edge exists (+0.0222R) and drag is 19R; at 8×ATR drag is 0.37R and the edge is
+gone. Lowering fees moves the drag but does not move that crossing point.
+
 ---
 
 ## The conclusion, stated plainly
 
-**On BTC/USD at Coinbase base-tier fees, no intraday pattern in this library is
-profitable under any tested combination of timeframe, stop width, target multiple, or
-order type.** That is not a failure of the search; it is the search returning an answer.
+**On BTC/USD, no intraday pattern in this library is profitable under any tested
+combination of timeframe, stop width, target multiple, order type, or obtainable fee
+tier -- including a deliberately optimistic upper bound pairing the best available data
+with the best obtainable fees.** That is not a failure of the search; it is the search
+returning an answer.
 
 There is one genuine, statistically defensible effect — `ma_pullback_long` in high
 relative volume during 06-12 ET — that survives multiple-testing correction and holds
@@ -108,11 +184,14 @@ out of sample. It is roughly 5× too small to pay for its own execution.
 
 ### What would actually change this
 
-- **A better fee tier.** Drag scales linearly with fees. Advanced 2 (≥$50k 30-day volume,
-  0.25% taker) cuts it ~5×, which is the same order as the shortfall. This is the only
-  lever measured here that could plausibly close the gap.
+- **Not a better fee tier.** This was the leading candidate and it has now been tested.
+  At the obtainable floor (~40 bps, OKX US base, maker both sides) zero patterns clear,
+  because the low-drag configurations are exactly the ones where the edge has decayed.
 - **Not wider stops.** Measured, not assumed: they dilute edge faster than cost.
 - **Not maker orders alone.** ~2× improvement against a ~5× shortfall.
+- **Not a rebate venue.** Negative maker fees require OKX VIP 7+, unobtainable at retail size.
+- What is left untested: other instruments (ETH, SOL, alts), other timeframes, and setups
+  not in this pattern library. The apparatus is instrument-agnostic and ready for them.
 
 ### What this says about paper trading
 
