@@ -440,6 +440,67 @@ base rate in this tool applies to you: nothing under n=30 is shown as a rate, be
 still listed — those are observations, and an observation is not an inference. Keep
 using `make live` and the rows accumulate until the gate opens.
 
+#### Your hit rate against a coin flip
+
+A hit rate on its own is uninterpretable, in exactly the way a pattern's win rate is
+uninterpretable until it has been compared to random entries. So `score` runs the same
+Monte Carlo the validator runs, with one thing randomised: **the direction**. Same bars,
+same risk, same horizon, same costs — a thousand coin flips reading the bars you read.
+
+Under n=30 it says so and stops:
+
+```
+vs random direction: not run. It needs 30 graded reads and you have 2. Until
+then a hit rate has nothing to be compared against.
+```
+
+Past the gate you get the comparison. Below is that table on a **deliberately
+uninformative sample** — the 40-read fixture from `tests/test_predictions.py`, which
+alternates long and short on a series that only rises, so it is a coin flip by
+construction:
+
+```
+vs random direction — 500 coin flips over the same 40 bars, same risk, same horizon
+measure               you   random    random 95% band      p  reading
+direction accuracy  50.0%    49.5%      35.0% … 62.5%  0.551  inside the noise band
+horizon R         +0.000R  -0.030R  -0.900R … +0.750R  0.551  inside the noise band
+gross R           +0.500R  +0.485R  +0.050R … +0.875R  0.551  inside the noise band
+random pays the same 248 bps and nets -2.522R, so the p-value is computed on gross —
+the costs are identical either way and cancel.
+
+Your 50.0% is not evidence you can read this chart: a coin flip on the same bars
+manages 49.5% and does at least as well as you 55% of the time.
+
+Nothing here is distinguishable from reading these bars at random. That is the
+finding — not a reason to look at a different statistic.
+```
+
+Look at the `gross R` row. **+0.500R per read looks like an edge.** The null says coin
+flips on those same bars averaged +0.485R, and beat it 55% of the time. The number was
+never a measure of skill; it was a measure of what those particular bars did, and the
+baseline is what tells the two apart.
+
+Three properties worth knowing:
+
+- **The bars are held fixed, so nothing needs correcting for afterwards.** The pattern
+  validator has to match its random entries to the pattern's time-of-day histogram,
+  because a setup that fires in the first 90 minutes compared against randomness spread
+  over the whole day is being compared against a different volatility regime. Here that
+  problem cannot arise: the null reads the same bars you did.
+- **It needs no independence assumption.** Two reads of the same bar — which is exactly
+  what the real log above contains — are perfectly correlated, and averaging them as
+  independent observations would understate the interval. But the null draws twice from
+  that same bar too, so both samples carry identical correlation structure and the
+  comparison stays like for like.
+- **The p-value is computed on gross**, as it is in `validate`. Costs at a given bar are
+  identical whichever way you read it, so net is gross shifted by a constant and the
+  ordering — hence the p-value — is unchanged.
+
+The verdict line at the bottom is gated on the null. `score` will not tell you your
+reads worked on a gross number the baseline just placed inside the noise band, because
+a report that contradicts the table printed directly above it is a report that tells
+you what you want to hear.
+
 Two more things it refuses to do:
 
 - **A read whose horizon has not closed is `pending`, not scored.** Grading whatever
@@ -489,7 +550,7 @@ The three `make` targets above cover the daily routine. Underneath, each is a
 | `tradedesk size --entry --stop --thesis [--account --risk-pct]` | position size; refuses without a thesis |
 | `tradedesk journal add --symbol --direction --entry --stop --thesis [...]` | log a trade |
 | `tradedesk journal report [--symbol]` | rolling stats, behavioural flags, live vs backtest |
-| `tradedesk journal score [--symbol --timeframe --target-r --max-bars --all]` | grade your predict-first reads against what price did |
+| `tradedesk journal score [--symbol --timeframe --target-r --max-bars --draws --all]` | grade your predict-first reads vs a random-direction null |
 | `tradedesk status` | what the store holds |
 
 [`uv`](https://docs.astral.sh/uv/) is the only prerequisite; it pins its own Python 3.12.
@@ -729,11 +790,11 @@ notes in [FINDINGS.md](FINDINGS.md).
 **TradingView fills are not read automatically.** There's no public API for it, and
 scraping it is out of scope by design. Log trades with `tradedesk journal add`.
 
-**Predictions are graded against price, not against a null.** `tradedesk journal score`
-replays each recorded read through the backtest's entry, exit and cost rules, but it
-does not yet compare your hit rate to a random-direction baseline the way `validate`
-compares a pattern to random entries. Until it does, a direction accuracy near 50% on a
-coin-flip instrument should be read as "no evidence either way", not as a score.
+**Prediction scoring has no multiple-testing correction.** `tradedesk journal score`
+compares your reads to a random-direction null, but unlike `validate` it does not
+correct across a family — it tests one hypothesis, so there is no family yet. If
+per-symbol or per-session-hour breakdowns are ever added, each slice is another test and
+Benjamini-Hochberg has to arrive with them.
 
 **Alerts are local only** — terminal bell and macOS notification centre. `notify.py` has
 no HTTP client at all; not disabled, absent. A trading tool that phones home leaks your

@@ -32,6 +32,7 @@ that flatters you by construction.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -90,10 +91,24 @@ class Graded:
     #: Signed move from entry to the end of the horizon, in R, in the predicted
     #: direction. Independent of where the stop was placed and of costs.
     horizon_r: float
+    #: The same bar, the same risk, read the other way -- your stop mirrored to the
+    #: far side of the entry. Precomputed here so the random-direction null costs
+    #: nothing per draw, the way `precompute_outcomes` does for the pattern baseline.
+    mirror_gross: float
+    mirror_net: float
 
     @property
     def direction_correct(self) -> bool:
         return self.horizon_r > 0
+
+    @property
+    def mirror_horizon_r(self) -> float:
+        """Exactly the negation: same move, same risk, opposite direction.
+
+        A horizon move of exactly zero leaves BOTH directions wrong, which is why the
+        null accuracy is measured rather than assumed to be 50%.
+        """
+        return -self.horizon_r
 
 
 @dataclass(frozen=True)
@@ -145,6 +160,117 @@ class ScoreReport:
         if len(self.graded) < self.min_n:
             return None
         return self.n_correct / len(self.graded)
+
+    def baseline(self, *, draws: int = 1000, seed: int = 0) -> DirectionBaseline | None:
+        """The random-direction null. None under the same sample gate."""
+        return run_direction_baseline(
+            self.graded, draws=draws, seed=seed, min_n=self.min_n
+        )
+
+
+@dataclass(frozen=True)
+class NullBand:
+    """One measure against its null: what you did, and what coin flips did."""
+
+    observed: float
+    mean: float
+    low: float
+    high: float
+    p_value: float
+
+    @property
+    def beats_random(self) -> bool:
+        return self.p_value < 0.05
+
+
+@dataclass(frozen=True)
+class DirectionBaseline:
+    draws: int
+    n_per_draw: int
+    accuracy: NullBand
+    horizon_r: NullBand
+    gross_r: NullBand
+    #: Reported for symmetry with the pattern validator. No separate p-value: costs at
+    #: a given bar are identical in both directions, so net is gross shifted by a
+    #: constant and the ordering -- hence the p-value -- is the same.
+    net_mean: float
+
+
+def _band(observed: float, null: list[float]) -> NullBand:
+    """One-sided: how often does random do at least as well as you did?
+
+    The add-one keeps p strictly positive, matching `backtest.baseline`.
+    """
+    null = sorted(null)
+    at_least = sum(1 for v in null if v >= observed)
+    return NullBand(
+        observed=observed,
+        mean=sum(null) / len(null),
+        low=null[int(0.025 * (len(null) - 1))],
+        high=null[int(0.975 * (len(null) - 1))],
+        p_value=(at_least + 1) / (len(null) + 1),
+    )
+
+
+def run_direction_baseline(
+    graded: list[Graded], *, draws: int = 1000, seed: int = 0, min_n: int = 30
+) -> DirectionBaseline | None:
+    """The null your hit rate has to beat: a coin flip reading the same bars.
+
+    Same bars, same risk, same horizon, same costs -- only the direction is randomised.
+    That isolates the one thing being tested. Everything else about the sample, including
+    which hours you happened to look at and how volatile they were, is held fixed by
+    construction rather than corrected for afterwards.
+
+    Matching the bars also disposes of the independence problem that forces the pattern
+    baseline to trade one position at a time. Two reads of the SAME bar are perfectly
+    correlated -- but the null draws twice from that same bar too, so the observed and
+    null samples carry identical correlation structure and the comparison stays like for
+    like. No independence assumption is required, and none is made.
+
+    Returns None below `min_n`. A p-value on a handful of reads is a number that looks
+    like evidence and is not, which is the failure this whole tool exists to avoid.
+    """
+    if len(graded) < min_n:
+        return None
+
+    rng = random.Random(seed)
+    n = len(graded)
+    # (horizon_r, gross, net) for the read as made, and for its mirror.
+    pairs = [
+        (
+            (g.horizon_r, g.r_gross, g.r_net),
+            (g.mirror_horizon_r, g.mirror_gross, g.mirror_net),
+        )
+        for g in graded
+    ]
+
+    acc_null: list[float] = []
+    hor_null: list[float] = []
+    gross_null: list[float] = []
+    net_null: list[float] = []
+    for _ in range(draws):
+        correct = 0
+        h_sum = g_sum = n_sum = 0.0
+        for as_read, mirrored in pairs:
+            hr, gr, nr = as_read if rng.random() < 0.5 else mirrored
+            correct += hr > 0
+            h_sum += hr
+            g_sum += gr
+            n_sum += nr
+        acc_null.append(correct / n)
+        hor_null.append(h_sum / n)
+        gross_null.append(g_sum / n)
+        net_null.append(n_sum / n)
+
+    return DirectionBaseline(
+        draws=draws,
+        n_per_draw=n,
+        accuracy=_band(sum(1 for g in graded if g.direction_correct) / n, acc_null),
+        horizon_r=_band(sum(g.horizon_r for g in graded) / n, hor_null),
+        gross_r=_band(sum(g.r_gross for g in graded) / n, gross_null),
+        net_mean=sum(net_null) / len(net_null),
+    )
 
 
 def load_predictions(
@@ -275,30 +401,42 @@ def grade(
                 continue
 
             risk = abs(mid - p.stop)
-            target = mid + target_r * risk if p.is_long else mid - target_r * risk
-            entry_fill = cm.fill_price(mid, is_long=p.is_long, is_entry=True)
 
-            ex = resolve_exit(
-                highs=h, lows=low, closes=c, opens=o, ts=ts, session_dates=sess,
-                tf_ms=_tf_ms(timeframe), entry_index=entry_index,
-                entry_price=entry_fill, stop=p.stop, target=target,
-                is_long=p.is_long, max_bars=max_bars, resolver=resolver,
-            )
-            exit_fill = cm.fill_price(ex.price, is_long=p.is_long, is_entry=False)
+            def outcome(is_long: bool, _idx=entry_index, _mid=mid, _risk=risk):
+                """Resolve one direction at this bar. Used for the read and its mirror.
 
-            gross = (ex.price - mid) / risk if p.is_long else (mid - ex.price) / risk
-            net = ((exit_fill - entry_fill) / risk if p.is_long
-                   else (entry_fill - exit_fill) / risk)
+                The mirror is the same bar with the same risk read the other way, so
+                the stop moves to the far side of the entry rather than staying put.
+                """
+                stop = _mid - _risk if is_long else _mid + _risk
+                target = (_mid + target_r * _risk if is_long
+                          else _mid - target_r * _risk)
+                fill = cm.fill_price(_mid, is_long=is_long, is_entry=True)
+                ex = resolve_exit(
+                    highs=h, lows=low, closes=c, opens=o, ts=ts, session_dates=sess,
+                    tf_ms=_tf_ms(timeframe), entry_index=_idx, entry_price=fill,
+                    stop=stop, target=target, is_long=is_long, max_bars=max_bars,
+                    resolver=resolver,
+                )
+                out_fill = cm.fill_price(ex.price, is_long=is_long, is_entry=False)
+                gross = ((ex.price - _mid) if is_long else (_mid - ex.price)) / _risk
+                net = ((out_fill - fill) if is_long else (fill - out_fill)) / _risk
+                return ex, stop, target, fill, out_fill, gross, net
+
+            ex, stop, target, entry_fill, exit_fill, gross, net = outcome(p.is_long)
+            _, _, _, _, _, mirror_gross, mirror_net = outcome(not p.is_long)
+
             move = c[horizon_index] - mid
             horizon_r = (move if p.is_long else -move) / risk
 
             graded.append(
                 Graded(
                     prediction=p, entry_ms=ts[entry_index], entry_mid=mid,
-                    entry_fill=entry_fill, stop=p.stop, target=target,
+                    entry_fill=entry_fill, stop=stop, target=target,
                     exit_ms=ts[ex.bar_index], exit_price=exit_fill,
                     exit_reason=ex.reason, bars_held=ex.bars_held,
                     r_gross=gross, r_net=net, horizon_r=horizon_r,
+                    mirror_gross=mirror_gross, mirror_net=mirror_net,
                 )
             )
 

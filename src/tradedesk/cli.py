@@ -564,6 +564,7 @@ def journal_score(
     timeframe: Optional[str] = typer.Option(None, "--timeframe"),
     target_r: float = typer.Option(2.0, "--target-r", help="target as a multiple of your stop"),
     max_bars: int = typer.Option(48, "--max-bars", help="horizon; also the gradeability rule"),
+    draws: int = typer.Option(1000, "--draws", help="Monte Carlo draws for the random-direction null"),
     show_all: bool = typer.Option(
         False, "--all", help="list every graded prediction, not just the last 20"
     ),
@@ -682,25 +683,90 @@ def journal_score(
         )
     console.print(st)
 
-    # Two different diagnoses, both gated behind the sample minimum. Naming which one
-    # applies is the entire value of keeping the numbers apart.
-    if gross.shown and net.shown and gross.expectancy_r > 0 >= net.expectancy_r:
+    # --- vs a coin flip reading the same bars ----------------------------------
+    base = rep.baseline(draws=draws)
+    if base is None:
+        console.print()
+        console.print(
+            f"[dim]vs random direction: not run. It needs {rep.min_n} graded reads and "
+            f"you have {len(rep.graded)}. Until then a hit rate has nothing to be "
+            "compared against.[/dim]"
+        )
+    else:
+        console.print()
+        bt = Table(
+            title=f"vs random direction — {base.draws:,} coin flips over the same "
+                  f"{base.n_per_draw:,} bars, same risk, same horizon",
+            box=None, header_style="bold", title_justify="left", pad_edge=False,
+        )
+        for c in ("measure", "you", "random", "random 95% band", "p", "reading"):
+            bt.add_column(c, justify="left" if c in ("measure", "reading") else "right")
+        for label, b, fmt in (
+            ("direction accuracy", base.accuracy, "{:.1%}"),
+            ("horizon R", base.horizon_r, "{:+.3f}R"),
+            ("gross R", base.gross_r, "{:+.3f}R"),
+        ):
+            reading = ("beats random" if b.beats_random
+                       else "inside the noise band" if b.low <= b.observed <= b.high
+                       else "worse than random")
+            bt.add_row(
+                label,
+                Text(fmt.format(b.observed),
+                     style="green" if b.beats_random else "white"),
+                fmt.format(b.mean),
+                f"{fmt.format(b.low)} … {fmt.format(b.high)}",
+                f"{b.p_value:.3f}",
+                Text(reading, style="green" if b.beats_random else "dim"),
+            )
+        console.print(bt)
+        console.print(
+            f"[dim]random pays the same {rep.round_trip_bps:.0f} bps and nets "
+            f"{base.net_mean:+.3f}R, so the p-value is computed on gross — "
+            "the costs are identical either way and cancel.[/dim]"
+        )
+        if not base.accuracy.beats_random:
+            console.print(
+                Text(
+                    f"Your {base.accuracy.observed:.1%} is not evidence you can read "
+                    f"this chart: a coin flip on the same bars manages "
+                    f"{base.accuracy.mean:.1%} and does at least as well as you "
+                    f"{base.accuracy.p_value:.0%} of the time.",
+                    style="yellow",
+                )
+            )
+
+    # Three diagnoses, all gated behind the sample minimum AND the null. Claiming your
+    # setups "worked" on a gross number the baseline just placed inside the noise band
+    # would contradict the table directly above it, which is how a report ends up
+    # telling you what you want to hear.
+    if base is not None and not base.gross_r.beats_random:
         console.print()
         console.print(
             Text(
-                "Your setups worked and the trades still lost money. The gap between "
-                f"those two rows is the {rep.round_trip_bps:.0f} bps round trip, not "
-                "your eye and not your stop.",
+                "Nothing here is distinguishable from reading these bars at random. "
+                "That is the finding — not a reason to look at a different statistic.",
                 style="bold yellow",
             )
         )
-    elif acc is not None and acc > 0.5 and gross.shown and gross.expectancy_r <= 0:
+    elif base is not None and gross.shown and net.shown and net.expectancy_r <= 0:
         console.print()
         console.print(
             Text(
-                f"You read direction right {acc:.0%} of the time and still lost before "
-                "costs. Price came back your way by the horizon but took your stop "
-                "first — that is stop placement, not your eye.",
+                "Your reads beat random gross and the trades still lost money. The gap "
+                f"between those two rows is the {rep.round_trip_bps:.0f} bps round "
+                "trip, not your eye and not your stop.",
+                style="bold yellow",
+            )
+        )
+    elif (base is not None and base.accuracy.beats_random
+          and gross.shown and gross.expectancy_r <= 0):
+        console.print()
+        console.print(
+            Text(
+                f"You read direction right {base.accuracy.observed:.0%} of the time, "
+                "better than random, and still lost before costs. Price came back your "
+                "way by the horizon but took your stop first — that is stop placement, "
+                "not your eye.",
                 style="bold yellow",
             )
         )

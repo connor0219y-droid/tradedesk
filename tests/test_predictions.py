@@ -270,6 +270,110 @@ def test_accuracy_is_reported_once_the_sample_clears_the_minimum(con, cfg):
     assert rep.horizon().reliability == "PROVISIONAL"   # n < 100
 
 
+def _alternating(con, n=40):
+    """n reads on a series that rises by 1 a bar, alternating long and short.
+
+    Every long is right and every short is wrong, so the observed accuracy is exactly
+    half and the sample is a known quantity for the null to be compared against.
+    """
+    bars = [(100.0 + i, 100.0 + i, 100.0 + i, 100.0 + i) for i in range(n + 6)]
+    put_bars(con, bars)
+    return [
+        predict(bar=i, direction="long" if i % 2 == 0 else "short",
+                stop=(101.0 + i) - 1.0 if i % 2 == 0 else (101.0 + i) + 1.0)
+        for i in range(n)
+    ]
+
+
+def test_the_mirror_is_the_same_bar_read_the_other_way(con, cfg):
+    """The null's raw material. Same bar, same risk, stop moved to the far side."""
+    put_bars(con, RISES)
+    (g,) = score(con, cfg, [predict()]).graded
+
+    assert g.horizon_r == pytest.approx(2.8)
+    assert g.mirror_horizon_r == pytest.approx(-2.8)     # exact negation
+    # Price runs to +2R, so the mirrored short is stopped out at its own 1R.
+    assert g.r_gross == pytest.approx(2.0)
+    assert g.mirror_gross == pytest.approx(-1.0)
+
+
+def test_the_baseline_is_refused_under_the_sample_minimum(con, cfg):
+    """A p-value on two reads is a number that looks like evidence and is not."""
+    put_bars(con, RISES)
+    assert score(con, cfg, [predict()]).baseline() is None
+
+    preds = _alternating(con, n=29)
+    assert score(con, cfg, preds, after_bars=60).baseline() is None
+
+
+def test_a_coin_flip_read_does_not_beat_random(con, cfg):
+    """The headline case: 50% accuracy must not read as skill.
+
+    Half right by construction, which is exactly what random direction produces, so
+    the p-value should sit far from significance and the band should contain it.
+    """
+    preds = _alternating(con, n=40)
+    rep = score(con, cfg, preds, after_bars=70)
+    base = rep.baseline(draws=500)
+
+    assert base is not None
+    assert base.n_per_draw == 40
+    assert base.accuracy.observed == pytest.approx(0.5)
+    assert base.accuracy.mean == pytest.approx(0.5, abs=0.05)
+    assert base.accuracy.low <= 0.5 <= base.accuracy.high
+    assert not base.accuracy.beats_random
+    assert base.accuracy.p_value > 0.2
+
+
+def test_reading_every_bar_right_beats_random(con, cfg):
+    """The complement, or 'does not beat random' would be indistinguishable from a stub.
+
+    All 40 reads long on a series that only rises: 100% accuracy, which no coin flip
+    over 40 bars reproduces.
+    """
+    n = 40
+    bars = [(100.0 + i, 100.0 + i, 100.0 + i, 100.0 + i) for i in range(n + 6)]
+    put_bars(con, bars)
+    preds = [predict(bar=i, direction="long", stop=100.0 + i) for i in range(n)]
+    base = score(con, cfg, preds, after_bars=70).baseline(draws=500)
+
+    assert base.accuracy.observed == pytest.approx(1.0)
+    assert base.accuracy.beats_random
+    assert base.accuracy.p_value < 0.05
+    assert base.horizon_r.beats_random
+
+
+def test_the_null_is_symmetric_around_zero_in_r(con, cfg):
+    """Flipping direction negates the horizon move, so the null must centre on zero."""
+    base = score(con, cfg, _alternating(con, n=40), after_bars=70).baseline(draws=500)
+
+    assert base.horizon_r.mean == pytest.approx(0.0, abs=0.35)
+    assert base.horizon_r.low < 0 < base.horizon_r.high
+
+
+def test_the_baseline_is_deterministic_given_a_seed(con, cfg):
+    """Two runs of the same report must not disagree about whether you beat random."""
+    rep = score(con, cfg, _alternating(con, n=40), after_bars=70)
+
+    a = rep.baseline(draws=200, seed=7)
+    b = rep.baseline(draws=200, seed=7)
+    assert a == b
+    assert rep.baseline(draws=200, seed=8) != a, "a different seed should redraw"
+
+
+def test_the_null_pays_the_same_costs_as_you_do(con, cfg):
+    """Random must not be handed a cheaper trade than the one you actually took."""
+    rep = score(con, cfg, _alternating(con, n=40), after_bars=70,
+                costs=COINBASE_BASE_TIER)
+    base = rep.baseline(draws=500)
+
+    assert base.net_mean < base.gross_r.mean, "costs must drag the null too"
+    drag = base.gross_r.mean - base.net_mean
+    assert drag > 0
+    # Gross and net differ by that same drag for the observed reads as well.
+    assert rep.gross().expectancy_r - rep.net().expectancy_r == pytest.approx(drag, rel=0.02)
+
+
 def test_a_prediction_written_by_live_is_graded_by_score(con, cfg):
     """live writes, score reads. Hand-built rows would not prove the columns line up."""
     put_bars(con, RISES)
