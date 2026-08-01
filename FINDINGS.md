@@ -160,6 +160,42 @@ nothing clears there, nothing clears on a thinner venue with a quarter the histo
 At 40 bps, **not one pattern reaches even raw p < 0.05** — fewer than the ~1.0 chance alone
 produces.
 
+### ETH and SOL: the same answer
+
+Full validation on the other two symbols — all 20 patterns, 1,000-draw Monte Carlo null,
+BH correction, 70/30 split, at the same 40 bps upper bound:
+
+| symbol | tf | stop | raw p<0.05 | survive BH | net > 0 | best gross | best net |
+|---|---|---|---|---|---|---|---|
+| ETH/USD | 5m | 1× | 0 | 0 | 0 | +0.0353R | −2.3286R |
+| ETH/USD | 5m | 8× | 0 | 0 | 0 | +0.0139R | −0.2860R |
+| ETH/USD | 15m | 8× | 0 | 0 | 0 | +0.0212R | −0.1427R |
+| ETH/USD | 1h | 16× | 0 | 0 | 0 | +0.0175R | −0.0193R |
+| SOL/USD | 5m | 1× | 1 | 0 | 0 | +0.0608R | −1.2314R |
+| SOL/USD | 5m | 8× | 0 | 0 | 0 | +0.0210R | −0.1475R |
+| SOL/USD | 15m | 8× | 1 | 0 | 0 | +0.0293R | −0.0611R |
+| SOL/USD | 1h | 16× | 0 | 0 | 0 | +0.0119R | −0.0088R |
+
+**0 BH survivors, 0 positive net across 8 configurations.**
+
+Two observations worth recording:
+
+- **Only 2 raw p<0.05 hits across 160 tests** (8 configs × 20 patterns), where chance
+  alone would produce ~8. The library generates *fewer* apparent findings than noise
+  would — a strong null, and a sign the one-sided Monte Carlo p-value is conservative.
+- **`ma_pullback_long` is the best gross on all three symbols.** That consistency is
+  mildly suggestive of a real effect rather than noise, but it reaches significance on
+  none of them outside BTC 5m, and net is negative everywhere.
+
+The closest approach to break-even anywhere in the entire study is **SOL/USD 1h 16×ATR at
+−0.0088R** (gross +0.0119R against 0.0207R of drag, p=0.179) — still negative, and not
+statistically distinguishable from random.
+
+A prediction made before this run was **wrong** and is recorded as such: SOL's sparse bars
+(19,852 zero-range, 3,450 gap-adjacent) were expected to be the most likely source of a
+spurious edge. SOL was instead the weakest of the three. The Phase 2 contiguity masking,
+which refuses to let a pattern fire across a gap, is the plausible reason.
+
 ### The structural reason the two never meet
 
 Section 4 showed edge decays faster than drag as stops widen. Section 5 shows the
@@ -172,7 +208,7 @@ gone. Lowering fees moves the drag but does not move that crossing point.
 
 ## The conclusion, stated plainly
 
-**On BTC/USD, no intraday pattern in this library is profitable under any tested
+**On BTC/USD, ETH/USD and SOL/USD, no intraday pattern in this library is profitable under any tested
 combination of timeframe, stop width, target multiple, order type, or obtainable fee
 tier -- including a deliberately optimistic upper bound pairing the best available data
 with the best obtainable fees.** That is not a failure of the search; it is the search
@@ -190,8 +226,11 @@ out of sample. It is roughly 5× too small to pay for its own execution.
 - **Not wider stops.** Measured, not assumed: they dilute edge faster than cost.
 - **Not maker orders alone.** ~2× improvement against a ~5× shortfall.
 - **Not a rebate venue.** Negative maker fees require OKX VIP 7+, unobtainable at retail size.
-- What is left untested: other instruments (ETH, SOL, alts), other timeframes, and setups
-  not in this pattern library. The apparatus is instrument-agnostic and ready for them.
+- **Not a different instrument.** ETH and SOL now tested across 4 configurations each:
+  0 survivors, 0 positive net, and only 2 raw p<0.05 hits across 160 tests where chance
+  produces ~8.
+- What is left untested: other instruments beyond these three, and setups not in this
+  pattern library. The apparatus is instrument-agnostic and ready for them.
 
 ### What this says about paper trading
 
