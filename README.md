@@ -9,9 +9,9 @@ instrument you trade them on*. Textbook pattern lore is mostly folklore until it
 been tested against a random entry with the same stop, target and costs, on the same
 symbol and timeframe.
 
-**Phase 1 (this release) is the data layer.** No signals, no patterns, no backtests
-yet — those are phases 2–6. What exists now is the candle store they will all stand
-on, and the causality contract that makes lookahead bias hard to write later.
+**Phases 1–2 are built.** Phase 1 is the candle store and the causality contract;
+Phase 2 is the causal level engine. No patterns, backtests or signals yet — those are
+phases 3–6.
 
 ---
 
@@ -22,6 +22,8 @@ make setup        # uv sync + create the DuckDB store
 make test         # full suite, no network required
 make fetch        # backfill (resumable — safe to interrupt)
 make quality      # the report that tells you whether to trust the data
+make levels       # every level for a symbol, sorted by distance in ATR
+make levels-sweep # assert no level is ever NaN or inf across the whole store
 make status       # what the store currently holds
 ```
 
@@ -175,6 +177,65 @@ This matters for Phase 3 because a pattern window spanning an outage is garbage.
 `window_mask` already refuses those windows; the report is what tells you they existed.
 
 ---
+
+## Phase 2 — the level engine
+
+Opening range, session VWAP with σ bands, ATR, prior-day levels, volume profile, and
+relative volume at the same time of day. Every level is causal, and two properties are
+enforced rather than hoped for.
+
+**Every level is a total function — never NaN, never inf.** This is not pedantry.
+Verified in polars: `1.0/0.0` is `inf`, `0.0/0.0` is `NaN`, and `is_nan()` catches only
+the second, so the obvious test would pass while `inf` propagated. Worse, **a NaN
+poisons every rolling window it touches, silently**, while a null at least yields null:
+
+```
+[1,2,NaN,4,5] rolling_mean(3) -> [None,None,nan,nan,nan]
+[1,2,None,4,5] rolling_mean(3) -> [None,None,None,None,None]
+```
+
+So the guard precedes the division — `safe_div(num, den, when_zero=...)`, where
+`when_zero` is keyword-only with **no default**. You cannot write a division in this
+codebase without stating what zero means. `assert_total` then refuses to let any frame
+containing NaN or inf leave the engine, even if a level bypassed `safe_div`.
+
+A zero-range bar (`high == low`, 19,852 of them on SOL/USD 1m) yields **null** for every
+shape ratio. Undefined stays undefined; this project does not fabricate a missing bar
+either. It is a per-bar decision and does not cascade — the True Range of a zero-range
+bar is perfectly well defined.
+
+**Every level declares the contiguous history it needs, and the engine applies the mask.**
+Level authors never write masking code, so they cannot forget it:
+
+```python
+@level(name="atr_intraday", kind="rolling", depth=2, outputs=("atr_intraday",), requires=("true_range",))
+```
+
+ATR uses Wilder's smoothing, which has *infinite* memory — unmasked, one contaminated
+True Range decays through every later value forever, and the largest TR in the store is
+**135× the median**. Two things prevent it: the gap bar's TR is nulled first (its
+"previous close" can be 6.6 hours stale), and the EWMA runs `.over(run_id)` so it
+restarts at every contiguity break. ATR stays null until 14 clean TRs accumulate rather
+than emitting a thin-sample value.
+
+The ATR matches TradingView's `ta.rma` exactly within a contiguous run — verified
+against an independently written reference. That needed care: polars'
+`ewm_mean(adjust=False)` seeds on the *first value*, while `ta.rma` seeds on the *SMA of
+the first 14*, a difference still carrying ~36% weight fourteen bars later.
+
+**Session levels null from the hole onward, not for the whole session.** This falls out
+of causality: a 30-minute hole at 14:00 does not invalidate the 10:00 VWAP, because at
+10:00 that hole has not happened yet. Strictly causal, and it preserves far more data —
+the alternative costs 19.4% of SOL 1m sessions.
+
+VWAP's σ uses a shifted-cumulative-sum formulation. The textbook
+`E[x²] − E[x]²` catastrophically cancels at crypto prices (tp² ≈ 3.6e9, terms agreeing
+to ten significant figures) and goes negative, at which point `sqrt` returns NaN. There
+is a test asserting the naive form really does diverge, so the guard is not cargo-cult.
+
+Verified over the real store: **8,092,152 bars across 12 series, all finite.** And the
+sweep is proven able to fail — injecting an unguarded `(c-l)/(h-l)` produces exactly
+19,852 non-finite values, one per zero-range bar.
 
 ## What is deliberately not here
 

@@ -74,6 +74,17 @@ sigma_floor_bps = 1.0
 # estimator entirely.
 outlier_abs_return = 0.20
 
+[levels]
+# Volume-profile bucket width is the prior session's daily ATR divided by this, floored
+# at tick_size. Scaling by ATR makes the profile comparable across BTC near 60,000 and
+# SOL near 150; fixing it per session stops bucket boundaries from shifting every bar.
+profile_buckets_per_atr = 100
+tick_size = 0.01
+value_area_pct = 70.0
+# Distances beyond this many ATR are logged as level.extreme_distance. NOT capped --
+# a large finite number is honest, and capping would fabricate a value.
+extreme_distance_atr = 50.0
+
 [costs]
 # Applied on BOTH sides of every backtested trade in phase 3. A strategy that is
 # profitable gross and negative net is a losing strategy.

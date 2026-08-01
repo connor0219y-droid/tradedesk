@@ -72,6 +72,7 @@ class Config:
     data: DataConfig
     session: SessionConfig
     quality: QualityConfig
+    levels: dict[str, Any] = field(default_factory=dict)
     costs: dict[str, Any] = field(default_factory=dict)
     risk: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
@@ -113,6 +114,7 @@ def load_config(path: Path | str | None = None) -> Config:
         data=data,
         session=session,
         quality=quality,
+        levels=raw.get("levels", {}),
         costs=raw.get("costs", {}),
         risk=raw.get("risk", {}),
         backtest=raw.get("backtest", {}),

@@ -23,6 +23,10 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning:tradedesk.*"]
+# `store` reads the real 4-year DuckDB file. Excluded from the default run for speed;
+# invoked by `make levels-sweep`. It skips WITH A REASON when the store is absent.
+addopts = "-m 'not store'"
+markers = ["store: requires the real candle store (slow)"]
 
 [dependency-groups]
 dev = [
