@@ -36,6 +36,12 @@ TIMEFRAME_MS: dict[str, int] = {
     "5m": 300 * MS,
     "15m": 900 * MS,
     "1h": 3600 * MS,
+    # Coinbase serves neither 4h nor a usable 1d (its daily candles are UTC-anchored
+    # and would silently disagree with the ET session model). Both are DERIVED by
+    # aggregation from stored 1h bars -- see resample.py. They appear here because
+    # this table is the bar-grid arithmetic, not a statement about what is fetchable;
+    # the venue keeps its own SUPPORTED set and still rejects them.
+    "4h": 14400 * MS,
     "6h": 21600 * MS,
     "1d": 86400 * MS,
 }
@@ -43,7 +49,7 @@ TIMEFRAME_MS: dict[str, int] = {
 # Timeframes whose length divides the Unix epoch evenly, so that
 # `floor(ms / tf) * tf` lands on a true bucket boundary. '1w' would NOT be safe
 # (the epoch fell on a Thursday), nor would calendar months.
-_EPOCH_ALIGNED = frozenset({"1m", "5m", "15m", "1h", "6h", "1d"})
+_EPOCH_ALIGNED = frozenset({"1m", "5m", "15m", "1h", "4h", "6h", "1d"})
 
 
 class NonExistentTimeError(ValueError):

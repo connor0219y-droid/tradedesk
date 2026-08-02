@@ -15,6 +15,7 @@ import polars as pl
 
 from ..config import Config
 from ..frames import read_bars
+from ..resample import read_bars_any
 from ..levels import compute_levels
 from ..patterns import REGISTRY, detect
 from ..patterns.regime import add_regime_columns
@@ -87,12 +88,14 @@ def validate_series(
     target_r: float = 2.0,
     max_bars: int = 48,
     min_bars_between_entries: int = 0,
+    hold_across_sessions: bool = False,
+    atr_column: str = "atr_intraday",
     baseline_draws: int = 200,
     bootstrap_iterations: int = 2000,
     use_intrabar: bool = True,
     costs: CostModel | None = None,
 ) -> list[PatternReport]:
-    bf = read_bars(con, symbol, timeframe, as_of=as_of, venue=cfg.venue.name)
+    bf = read_bars_any(con, symbol, timeframe, as_of=as_of, venue=cfg.venue.name)
     if bf.is_empty:
         return []
     df = add_regime_columns(compute_levels(bf, cfg).to_polars())
@@ -107,6 +110,7 @@ def validate_series(
     bt = BacktestConfig(
         stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
         min_bars_between_entries=min_bars_between_entries,
+        hold_across_sessions=hold_across_sessions, atr_column=atr_column,
     )
     split = make_split(df, in_sample_pct=float(cfg.backtest.get("in_sample_pct", 70)))
     min_n = int(cfg.backtest.get("min_sample_size", 30))
@@ -164,6 +168,7 @@ def validate_series(
                 pattern=name, symbol=symbol, timeframe=timeframe,
                 direction=spec.direction, stop_atr=stop_atr, target_r=target_r,
                 max_bars=max_bars, min_bars_between_entries=min_bars_between_entries,
+                atr_column=atr_column, hold_across_sessions=hold_across_sessions,
                 in_sample=s_in, out_sample=s_out, in_sample_gross=s_in_gross,
                 gross_in=g_in, gross_out=g_out,
                 drag_in=drag, baseline=base, signals=res.signals_total,

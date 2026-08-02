@@ -279,15 +279,134 @@ trades (5.9% on 5m) and is worth **−0.031R** on 15m, i.e. it makes this result
 *pessimistic*, by about 0.6% of the cost drag. The 96/288-bar holding cap never binds;
 median holding period is 9–10 bars.
 
+## 7. Swing horizon: costs stop dominating, and the edge still is not there
+
+The first six findings all end the same way — a gross edge near +0.03R against a cost
+drag of −5R to −19R. That ratio is a property of the *horizon*, not of the patterns: a
+1×ATR(5m) stop is 0.14% of price while the round trip is 2.48%. So the obvious question
+is what happens when the stop is a whole daily ATR and the trade is allowed to run for
+days. This finding answers it.
+
+```
+tradedesk validate --symbol BTC/USD --timeframe 4h \
+  --stop-atr 2.0 --target-r 3.0 --max-bars 42 \
+  --hold-across-sessions --risk-scale atr_daily --draws 1000
+```
+
+### What had to be built, and what was assumed
+
+- **4h and 1d bars are derived**, by UTC-anchored aggregation from stored 1h
+  (`resample.py`). Coinbase serves no 4h, and its 1d candles are UTC-anchored in a way
+  that would silently disagree with the ET session model. Buckets are UTC-anchored
+  because an ET-anchored grid produces a 3- or 5-hour "4h" bar at each DST transition,
+  which the contiguity machinery would correctly read as a gap. Incomplete buckets are
+  dropped rather than emitted with the wrong open — **4 buckets over four years**.
+- **Positions now carry across midnight ET** (`hold_across_sessions`, default off). The
+  engine previously closed every trade at the session boundary, which made a multi-day
+  hold structurally impossible: the boundary fired on the first midnight regardless of
+  the bar cap.
+- **Stops are in daily ATR at both timeframes.** On 1d that is the timeframe's own
+  ATR(14) (median **3.507%** of price); on 4h it is `atr_daily` (**3.492%**). Verified
+  equal, which is what makes the two rows comparable.
+- **Six session-anchored detectors are excluded** — opening-range breaks, failed
+  breaks, VWAP reclaims. `or30_high` is null at every 4h and 1d bar, because a
+  30-minute opening range cannot exist inside a 4-hour bar. 20 detectors remain.
+
+### Costs really do stop dominating
+
+| stop (BTC) | risk, % of price | cost drag |
+|---|---|---|
+| 1×ATR(5m) | 0.140% | **−17.7R** |
+| 0.5×daily ATR | 1.75% | −1.42R |
+| 1×daily ATR | 3.49% | −0.71R |
+| 2×daily ATR | 6.98% | **−0.36R** |
+
+That is a ~50× improvement on the worst intraday cell, and it is the whole point of the
+horizon change. Best net anywhere: **−0.020R** (SOL/USD 4h, 1×ATR, 2R) against the
+previous project best of −0.27R.
+
+### And one cell finally went positive — it does not survive contact
+
+BTC/USD 1d, 2×ATR stop, 3R target: **net +0.024R**, on `inside_bar_long`. The first
+positive net expectancy in the project. Every check kills it:
+
+| | |
+|---|---|
+| in-sample n | 45 — PROVISIONAL, below the n≥100 line |
+| out-of-sample n | 18 — **REFUSED**, below n≥30 |
+| gross in → out | +0.3714R → **−0.1045R**, sign flipped |
+| 95% CI on net | [−0.379, +0.459] — straddles zero |
+| vs its own null | +0.3714R against a null of +0.1551R, **p = 0.129** |
+| survives BH | no |
+
+It is also the best of 18 grid cells × ~10 eligible detectors. One +0.024R out of ~180
+tests is what chance produces.
+
+### The large gross numbers are drift, not edge
+
+Swing gross expectancies look ~10× the intraday ones (+0.27R vs +0.03R), which is the
+result most likely to be misread. Splitting pattern against its own time-matched null,
+by direction, shows where it comes from:
+
+| | mean gross | mean null | difference |
+|---|---|---|---|
+| BTC 4h long (10 detectors) | +0.1916R | +0.0510R | +0.1406R |
+| BTC 4h short (10 detectors) | −0.0663R | −0.0507R | −0.0156R |
+| ETH 4h long | −0.0106R | +0.0503R | −0.0609R |
+| SOL 4h long | +0.1141R | +0.0211R | +0.0930R |
+
+**Random entries are strongly directional at this horizon** — positive for longs,
+negative for shorts — because a four-year window of crypto has a large upward drift and
+a multi-day hold captures it. The pattern-minus-null differences are small and change
+sign across instruments, and every one sits inside the null's own 95% width (±0.4R on
+1d). Across all six symbol × timeframe families, **1 raw p<0.05 out of 93 scored tests,
+where chance alone produces ~4.7**, and **0 survive Benjamini-Hochberg anywhere**.
+
+### Two structural limits worth more than the numbers
+
+**Daily bars cannot answer this question with four years of data.** One position at a
+time plus a multi-day hold bounds the achievable sample:
+
+| | bars | n≥30 in-sample | n≥100 in-sample | n≥30 out-of-sample |
+|---|---|---|---|---|
+| 4h (any symbol) | 8,761 | 20 / 20 | 12 / 20 | 14 / 20 |
+| 1d (any symbol) | 1,458 | 10–12 / 20 | **0 / 20** | **0 / 20** |
+
+No daily detector on any symbol clears the out-of-sample gate. The daily timeframe
+cannot return a verdict here at all, and that is a fact about the data budget, not
+about the setups.
+
+**The widest stops stop testing the setup.** Exit mix on BTC, pooled over 20 detectors:
+
+| config | trades | median hold | stop | target | bar cap |
+|---|---|---|---|---|---|
+| 4h, 1×ATR / 2R | 3,304 | 3.7 days | 50.5% | 21.5% | 27.7% |
+| 4h, 2×ATR / 3R | 2,515 | 7.0 days | 22.6% | 2.1% | **74.6%** |
+| 1d, 2×ATR / 3R | 672 | 18 days | 45.8% | 7.3% | **45.5%** |
+
+At 2×ATR the target is hit 2.1% of the time and three quarters of trades die at the bar
+cap. Those cells are measuring "hold for seven days" — which is exactly the cell that
+produced the positive net. Same trap as the intraday sweep's session-close exits, in a
+new place.
+
 ---
 
 ## The conclusion, stated plainly
 
-**On BTC/USD, ETH/USD and SOL/USD, no intraday pattern in this library is profitable under any tested
-combination of timeframe, stop width, target multiple, order type, or obtainable fee
-tier -- including a deliberately optimistic upper bound pairing the best available data
-with the best obtainable fees.** That is not a failure of the search; it is the search
-returning an answer.
+**On BTC/USD, ETH/USD and SOL/USD, no pattern in this library is profitable under any tested
+combination of timeframe, stop width, target multiple, order type, holding horizon, or
+obtainable fee tier -- including a deliberately optimistic upper bound pairing the best
+available data with the best obtainable fees.** That is not a failure of the search; it
+is the search returning an answer.
+
+**The reason changes with the horizon, and finding 7 is where it changes.** Intraday,
+costs dominate by one to two orders of magnitude and nothing else gets a chance to
+matter. At swing horizon -- daily-ATR stops, multi-day holds -- the drag falls to
+-0.36R and stops being the binding constraint. What is left is simply no demonstrable
+edge: random entries with the same stop, target and holding rule do as well, and the
+apparently large swing gross numbers are the market's upward drift, which the null
+captures in full. Cheaper execution was never going to fix that, and now there is a
+regime where cheap execution has been tested directly.
 
 There is one genuine, statistically defensible effect — `ma_pullback_long` in high
 relative volume during 06-12 ET — that survives multiple-testing correction and holds
@@ -307,8 +426,15 @@ out of sample. It is roughly 5× too small to pay for its own execution.
 - **Not an imported strategy from elsewhere.** The first one tested (finding 6, an EMA
   cross with a trend filter and RSI confirmation) lands in the same place as the native
   library: marginal gross edge, no BH survivor, net −5.22R.
+- **Not a longer horizon.** This was the strongest remaining candidate, because it is
+  the only lever that moves the cost ratio by 50× rather than 2×. Tested in finding 7:
+  the drag duly collapses to −0.36R, and 0 of 20 detectors survive BH on any of six
+  symbol × timeframe families. The constraint stops being cost and becomes the absence
+  of edge.
 - What is left untested: other instruments beyond these three, and setups not in this
-  pattern library. The apparatus is instrument-agnostic and ready for them.
+  pattern library. The apparatus is instrument-agnostic and ready for them. Note that
+  a daily-bar study of anything will need more than four years of history — at one
+  position at a time, 1,458 daily bars cannot fill an out-of-sample window (finding 7).
 
 ### What this says about paper trading
 
@@ -323,4 +449,11 @@ is worth knowing before funding anything.
   BH does not fully correct for. The out-of-sample survival is the stronger evidence.
 - n for the surviving slice at wide stops is 129–135 — above the n≥100 line, but only just.
 - Session-close exits dominate at wide stops, so those configurations are no longer
-  testing an intraday setup.
+  testing an intraday setup. The swing sweep hits the same wall in a different place:
+  bar-cap exits reach 74.6% at 2×daily ATR (finding 7).
+- The swing study rests on derived bars. 4h and 1d are aggregated from stored 1h rather
+  than fetched, so any error in `resample.py` propagates to every number in finding 7.
+  It is covered by hand-checked known-answer tests, which is not the same as having the
+  venue's own bars to compare against.
+- Finding 7's daily rows are in-sample only, by necessity — no daily detector on any
+  symbol reaches n≥30 out of sample.

@@ -61,6 +61,11 @@ class PatternReport:
     slices: list[tuple[str, int, float | None, float | None]]
     round_trip_bps: float
     min_bars_between_entries: int = 0
+    #: Which ATR the stop is measured in. "atr_intraday" is the timeframe's own ATR;
+    #: "atr_daily" is the ET-day ATR, used to put a swing stop on a daily scale while
+    #: signalling on faster bars.
+    atr_column: str = "atr_intraday"
+    hold_across_sessions: bool = False
 
     #: Set by apply_multiple_testing_correction(). None until then.
     survives_correction: bool | None = None
@@ -128,11 +133,13 @@ def render(console: Console, reports: list[PatternReport]) -> None:
         if head.min_bars_between_entries
         else ""
     )
+    scale = "daily ATR" if head.atr_column == "atr_daily" else "ATR"
+    holds = " · holds across sessions" if head.hold_across_sessions else ""
     console.print(
         f"[bold cyan]{head.symbol}[/bold cyan] {head.timeframe} · "
-        f"{head.stop_atr:g}×ATR stop · {head.target_r:g}R target "
-        f"({head.stop_atr * head.target_r:g}×ATR) · {head.max_bars} bar cap{cooldown} · "
-        f"round trip {head.round_trip_bps:.0f} bps"
+        f"{head.stop_atr:g}×{scale} stop · {head.target_r:g}R target "
+        f"({head.stop_atr * head.target_r:g}×{scale}) · {head.max_bars} bar cap"
+        f"{cooldown}{holds} · round trip {head.round_trip_bps:.0f} bps"
     )
     console.print(
         "[dim]gross = does the pattern have edge · net = would it have made money · "

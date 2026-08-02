@@ -544,7 +544,8 @@ The three `make` targets above cover the daily routine. Underneath, each is a
 | `tradedesk fetch [--symbol --timeframe --until]` | backfill, idempotent and resumable |
 | `tradedesk quality [--symbol --timeframe]` | data-quality verdict per series |
 | `tradedesk levels --symbol X [--timeframe --at]` | every level, sorted by distance in ATR |
-| `tradedesk validate --symbol X [--pattern --stop-atr --target-r --draws --detail]` | backtest vs a random baseline; writes the qualification registry |
+| `tradedesk validate --symbol X [--pattern --stop-atr --target-r --max-bars --draws --detail]` | backtest vs a random baseline; writes the qualification registry |
+| `tradedesk validate ... --timeframe 4h\|1d --hold-across-sessions --risk-scale atr_daily` | swing horizon: derived bars, multi-day holds, stops in daily ATR |
 | `tradedesk brief [--symbol --timeframe]` | pre-session brief |
 | `tradedesk live --symbol X [--timeframe] [--no-predict]` | live companion, predict-first by default |
 | `tradedesk size --entry --stop --thesis [--account --risk-pct]` | position size; refuses without a thesis |
@@ -552,6 +553,13 @@ The three `make` targets above cover the daily routine. Underneath, each is a
 | `tradedesk journal report [--symbol]` | rolling stats, behavioural flags, live vs backtest |
 | `tradedesk journal score [--symbol --timeframe --target-r --max-bars --draws --all]` | grade your predict-first reads vs a random-direction null |
 | `tradedesk status` | what the store holds |
+
+**Stored vs derived timeframes.** The store holds 1m, 5m, 15m and 1h — what Coinbase
+serves. `4h` and `1d` are built on read by aggregating 1h bars (`resample.py`), on UTC
+boundaries, dropping any bucket missing a sub-bar rather than emitting one with the
+wrong open. Nothing needs fetching to use them. Coinbase's own daily candles are
+deliberately not used: they are UTC-anchored in a way that would disagree with the ET
+session model everything else here is built on.
 
 [`uv`](https://docs.astral.sh/uv/) is the only prerequisite; it pins its own Python 3.12.
 

@@ -65,6 +65,9 @@ class BacktestConfig:
     #: on consecutive bars. Zero means the only spacing is one-position-at-a-time,
     #: which is what every pattern validated before this option existed assumed.
     min_bars_between_entries: int = 0
+    #: Carry positions past the ET session boundary. Required for any multi-day hold;
+    #: False keeps the intraday behaviour every earlier result was measured with.
+    hold_across_sessions: bool = False
 
 
 @dataclass
@@ -135,6 +138,7 @@ def precompute_outcomes(
             highs=h, lows=l, closes=c, opens=o, ts=ts, session_dates=sess, tf_ms=tf,
             entry_index=i + 1, entry_price=entry, stop=stop, target=target,
             is_long=is_long, max_bars=bt.max_bars, resolver=resolver,
+            hold_across_sessions=bt.hold_across_sessions,
         )
         exit_fill = costs.fill_price(ex.price, is_long=is_long, is_entry=False)
         gross = (ex.price - mid) / risk if is_long else (mid - ex.price) / risk
@@ -215,6 +219,7 @@ def run_backtest(
             highs=h, lows=l, closes=c, opens=o, ts=ts, session_dates=sess, tf_ms=tf,
             entry_index=i + 1, entry_price=entry, stop=stop, target=target,
             is_long=is_long, max_bars=bt.max_bars, resolver=resolver,
+            hold_across_sessions=bt.hold_across_sessions,
         )
         exit_fill = costs.fill_price(ex.price, is_long=is_long, is_entry=False)
 

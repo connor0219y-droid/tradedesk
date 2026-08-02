@@ -285,6 +285,14 @@ def validate(
     min_bars_between: int = typer.Option(
         0, "--min-bars-between", help="cooldown in bars between consecutive entries"
     ),
+    hold_across_sessions: bool = typer.Option(
+        False, "--hold-across-sessions",
+        help="carry positions past midnight ET (required for multi-day holds)",
+    ),
+    atr_column: str = typer.Option(
+        "atr_intraday", "--risk-scale",
+        help="ATR the stop is measured in: atr_intraday or atr_daily",
+    ),
     draws: int = typer.Option(1000, "--draws", help="Monte Carlo baseline draws"),
     detail: bool = typer.Option(False, "--detail", help="per-pattern breakdown"),
     config: Optional[Path] = typer.Option(None, "--config"),
@@ -303,6 +311,7 @@ def validate(
         patterns=[pattern] if pattern else None,
         stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
         min_bars_between_entries=min_bars_between,
+        hold_across_sessions=hold_across_sessions, atr_column=atr_column,
         baseline_draws=draws,
     )
     if not reports:

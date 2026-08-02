@@ -88,11 +88,18 @@ def resolve_exit(
     is_long: bool,
     max_bars: int,
     resolver: IntrabarResolver | None = None,
+    hold_across_sessions: bool = False,
 ) -> ExitResult:
     """Walk forward from the entry bar until stop, target, session close or bar cap.
 
     The entry bar itself is included: entry is at its open, so it can be stopped out on
     the very bar it was entered on.
+
+    `hold_across_sessions` turns off the ET-session-boundary exit. It defaults to False
+    because every intraday result in this project was measured with the boundary
+    enforced, and a swing study must not silently restate them. A multi-day hold is
+    structurally impossible without it: the boundary fires on the first midnight and
+    caps every trade at one session regardless of `max_bars`.
 
     MFE and MAE are tracked in R, which Phase 6's behavioural flags need ("exited
     manually while MFE >= 1R for less than 0.4R").
@@ -106,8 +113,9 @@ def resolve_exit(
     for j in range(entry_index, last + 1):
         # A new session began: close the trade at the previous bar's close rather than
         # carrying it. Crypto never stops trading, but the ET-day anchor is what defines
-        # a session here, and holding across it is a different strategy.
-        if session_dates[j] != entry_session:
+        # a session here, and holding across it is a different strategy -- which is
+        # exactly what `hold_across_sessions` selects.
+        if not hold_across_sessions and session_dates[j] != entry_session:
             k = max(j - 1, entry_index)
             return ExitResult(k, closes[k], "session_close",
                               k - entry_index + 1, mfe, mae)
