@@ -39,6 +39,56 @@ def _true_range(ctx: LevelContext) -> pl.DataFrame:
     )
 
 
+def seeded_average(
+    df: pl.DataFrame,
+    src: str,
+    *,
+    period: int,
+    alpha: float,
+    out: str,
+    counter: str | None = None,
+) -> pl.DataFrame:
+    """Recursive average seeded with the SMA of the first `period` values, per run.
+
+    TradingView's ta.rma (and ta.ema) seed this way. polars' ewm_mean(adjust=False)
+    seeds with the FIRST value instead -- a difference that still carries ~36% weight
+    a full period later at alpha=1/14, so it is not cosmetic: a value computed the
+    other way visibly disagrees with the chart it is supposed to reproduce.
+
+    Feeding nulls before the seed point reproduces the TradingView behaviour exactly:
+    ewm_mean skips leading nulls and seeds on the first non-null, which we make the SMA.
+
+    `src` may be null on the first bar of a run -- a differenced series cannot span a
+    gap -- so the warm-up counter counts NON-NULL observations rather than rows. Pass
+    `counter` to keep that count as a named column; otherwise it is dropped.
+    """
+    n_col = counter or f"_{out}_n"
+    seed, inp = f"_{out}_seed", f"_{out}_in"
+
+    df = df.with_columns(
+        pl.col(src).is_not_null().cum_sum().over("run_id").cast(pl.UInt32).alias(n_col),
+        pl.col(src)
+        .rolling_mean(window_size=period, min_samples=period)
+        .over("run_id")
+        .alias(seed),
+    )
+    df = df.with_columns(
+        pl.when(pl.col(n_col) < period)
+        .then(None)
+        .when(pl.col(n_col) == period)
+        .then(pl.col(seed))
+        .otherwise(pl.col(src))
+        .alias(inp)
+    )
+    df = df.with_columns(
+        pl.col(inp)
+        .ewm_mean(alpha=alpha, adjust=False, ignore_nulls=True)
+        .over("run_id")
+        .alias(out)
+    )
+    return df.drop([seed, inp] + ([] if counter else [n_col]))
+
+
 @level(
     name="atr_intraday",
     kind="rolling",
@@ -50,46 +100,20 @@ def _atr_intraday(ctx: LevelContext) -> pl.DataFrame:
     """Wilder ATR on the intraday timeframe, reset at every contiguity break.
 
     Declared depth is 2 (inherited from true_range); the 14-observation requirement is
-    enforced explicitly below against the RUN, not against a fixed window, because the
-    EWMA's warm-up is per-run rather than per-window.
+    enforced by `seeded_average` against the RUN, not against a fixed window, because
+    the EWMA's warm-up is per-run rather than per-window.
     """
     period = int(ctx.config.backtest.get("atr_period", 14))
-    alpha = 1.0 / period
 
     df = ctx.df.with_columns(
         # The gap bar's TR is measuring the hole, not the bar. Drop it before smoothing.
         pl.when(pl.col("gap")).then(None).otherwise(pl.col("true_range")).alias("_tr_clean")
     )
-    df = df.with_columns(
-        pl.col("_tr_clean").is_not_null().cum_sum().over("run_id").cast(pl.UInt32).alias(
-            "clean_tr_in_run"
-        ),
-        pl.col("_tr_clean")
-        .rolling_mean(window_size=period, min_samples=period)
-        .over("run_id")
-        .alias("_sma_seed"),
+    df = seeded_average(
+        df, "_tr_clean", period=period, alpha=1.0 / period,
+        out="atr_intraday", counter="clean_tr_in_run",
     )
-    # TradingView's ta.atr uses ta.rma, which seeds with the SMA of the first `period`
-    # values and only then applies the recursion. polars' ewm_mean(adjust=False) seeds
-    # with the FIRST value instead -- a difference that still carries ~36% weight 14
-    # bars later, so it is not cosmetic.
-    #
-    # Feeding nulls before the seed point reproduces rma exactly: ewm_mean skips leading
-    # nulls and seeds on the first non-null, which we make the SMA.
-    df = df.with_columns(
-        pl.when(pl.col("clean_tr_in_run") < period)
-        .then(None)
-        .when(pl.col("clean_tr_in_run") == period)
-        .then(pl.col("_sma_seed"))
-        .otherwise(pl.col("_tr_clean"))
-        .alias("_atr_input")
-    )
-    return df.with_columns(
-        pl.col("_atr_input")
-        .ewm_mean(alpha=alpha, adjust=False, ignore_nulls=True)
-        .over("run_id")
-        .alias("atr_intraday")
-    ).drop("_tr_clean", "_sma_seed", "_atr_input")
+    return df.drop("_tr_clean")
 
 
 @level(name="ema", kind="rolling", depth=2, outputs=("ema_fast", "ema_slow"))
@@ -100,6 +124,14 @@ def _ema(ctx: LevelContext) -> pl.DataFrame:
     averaging prices from either side of a gap as though they were adjacent. So it runs
     .over(run_id) and stays null until a full period of bars has accumulated within the
     run, rather than emitting a value seeded on one bar.
+
+    NOTE: this one seeds on the first close (polars' adjust=False default), NOT on the
+    SMA the way `seeded_average` and TradingView's ta.ema do. The seed still carries
+    ~15% weight at the first emitted bar and decays to nothing about three periods
+    later, so it affects roughly bars 20-60 of each run and nothing after. It is left
+    as-is deliberately: `ma_pullback_*` was validated against these values, and moving
+    them would silently restate a published result. The momentum levels, which exist to
+    reproduce a TradingView chart, use `seeded_average` instead.
     """
     levels_cfg = getattr(ctx.config, "levels", {}) or {}
     fast = int(levels_cfg.get("ema_fast", 20))

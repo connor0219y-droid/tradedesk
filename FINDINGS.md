@@ -204,6 +204,55 @@ configurations where the edge has already decayed to nothing.** They do not over
 1×ATR the edge exists (+0.0222R) and drag is 19R; at 8×ATR drag is 0.37R and the edge is
 gone. Lowering fees moves the drag but does not move that crossing point.
 
+## 6. An imported TradingView strategy: the losing sample was luck, the losing system is not
+
+An EMA 9/21 cross, filtered by the 200 EMA and confirmed by RSI(14), with a 2×ATR stop,
+3×ATR target and 6 bars minimum between entries — reconstructed from a chart showing
+**124 trades, profit factor 0.721, −660.74 on 100k over two months (Bitstamp)**. The
+entry condition was not visible in the settings; the reconstruction and its assumptions
+are documented in `patterns/trend.py`.
+
+```
+tradedesk validate --symbol BTC/USD --timeframe 15m \
+  --stop-atr 2.0 --target-r 1.5 --max-bars 96 --min-bars-between 6 --draws 1000
+```
+
+**The timeframe identifies itself.** Over 201 overlapping two-month windows, this
+setup produces a median of **120 trades** on 15m (range 100–145) and **355** on 5m. The
+chart's 124 is a 15m figure.
+
+| BTC/USD, 4 years | 5m | 15m |
+|---|---|---|
+| trades (long + short) | 8,574 | 2,891 |
+| gross expectancy | +0.0063R | +0.0405R |
+| gross profit factor | 1.011 | 1.080 |
+| Monte Carlo p (long / short) | 0.305 / 0.689 | 0.134 / 0.238 |
+| survives BH across 22 patterns | no | no |
+| out-of-sample gross | +0.0079R / +0.0364R | +0.0445R / +0.0752R |
+| **net expectancy @ 248 bps** | **−10.21R** | **−5.22R** |
+
+**Two months is far too short to conclude anything.** 37% of two-month windows on 15m
+have negative gross expectancy even though the four-year gross is positive, and window
+profit factor ranges 0.753 to 1.720 around a median of 1.079. A losing two-month sample
+is unremarkable — it is roughly a coin flip.
+
+**And the strategy is still not tradeable**, for the reason everything else in this
+document is not: gross edge of +0.04R against a cost drag of −5.22R. The sample size
+question and the profitability question have different answers, and only the second one
+matters.
+
+Worth noting: the observed 0.721 sits below *every* one of the 201 windows (minimum
+0.753). Some of that gap is venue and some is the reconstructed entry condition, but it
+also means the chart's two months were a bad draw even for a strategy whose long-run
+gross is marginally positive.
+
+Caveats specific to this test: the engine closes any open position at the midnight-ET
+session boundary, which the TradingView strategy does not — that affects 18.2% of 15m
+trades (5.9% on 5m) and is worth **−0.031R** on 15m, i.e. it makes this result slightly
+*pessimistic*, by about 0.6% of the cost drag. The 96/288-bar holding cap never binds;
+median holding period is 9–10 bars. RSI's confirmation threshold (the midline) is the
+least-constrained inferred parameter.
+
 ---
 
 ## The conclusion, stated plainly
@@ -229,6 +278,9 @@ out of sample. It is roughly 5× too small to pay for its own execution.
 - **Not a different instrument.** ETH and SOL now tested across 4 configurations each:
   0 survivors, 0 positive net, and only 2 raw p<0.05 hits across 160 tests where chance
   produces ~8.
+- **Not an imported strategy from elsewhere.** The first one tested (finding 6, an EMA
+  cross with a trend filter and RSI confirmation) lands in the same place as the native
+  library: marginal gross edge, no BH survivor, net −5.22R.
 - What is left untested: other instruments beyond these three, and setups not in this
   pattern library. The apparatus is instrument-agnostic and ready for them.
 

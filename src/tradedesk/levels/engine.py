@@ -24,7 +24,16 @@ import polars as pl
 from ..config import Config
 from ..frames import BarFrame
 from ..timeutil import tf_ms as _tf_ms
-from . import barshape, context, opening_range, prior, profile, scale, vwap  # noqa: F401
+from . import (  # noqa: F401
+    barshape,
+    context,
+    momentum,
+    opening_range,
+    prior,
+    profile,
+    scale,
+    vwap,
+)
 from .base import REGISTRY, LevelContext, LevelSpec, assert_total, resolve_order
 from .scale import atr_percentile_frame, daily_atr_frame, distance_in_atr
 from .session import add_session_columns, session_valid
@@ -33,6 +42,8 @@ from .session import add_session_columns, session_valid
 DEFAULT_LEVELS = [
     "barshape",
     "ema",
+    "ema_stack",
+    "rsi",
     "bar_return",
     "true_range",
     "atr_intraday",

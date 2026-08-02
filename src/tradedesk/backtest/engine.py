@@ -60,6 +60,11 @@ class BacktestConfig:
     target_r: float = 2.0
     max_bars: int = 48
     atr_column: str = "atr_intraday"
+    #: Cooldown: bars that must elapse between one ENTRY and the next. Strategies that
+    #: fire on a fast/slow MA cross use this to stop a chopping pair from re-entering
+    #: on consecutive bars. Zero means the only spacing is one-position-at-a-time,
+    #: which is what every pattern validated before this option existed assumed.
+    min_bars_between_entries: int = 0
 
 
 @dataclass
@@ -70,6 +75,7 @@ class BacktestResult:
     skipped_gap: int = 0
     skipped_busy: int = 0
     skipped_no_next_bar: int = 0
+    skipped_cooldown: int = 0
 
     @property
     def n(self) -> int:
@@ -168,10 +174,16 @@ def run_backtest(
     sig_idx = [i for i, v in enumerate(signals.to_list()) if v]
     res.signals_total = len(sig_idx)
     busy_until = -1
+    last_entry = None
 
     for i in sig_idx:
         if i <= busy_until:
             res.skipped_busy += 1
+            continue
+        # Measured entry-to-entry, on the entry bar (i+1), not the signal bar: the
+        # strategy's "minimum bars between entries" is a property of the fills.
+        if last_entry is not None and (i + 1) - last_entry < bt.min_bars_between_entries:
+            res.skipped_cooldown += 1
             continue
         if i + 1 >= len(o):
             res.skipped_no_next_bar += 1
@@ -223,5 +235,6 @@ def run_backtest(
             )
         )
         busy_until = ex.bar_index
+        last_entry = i + 1
 
     return res

@@ -282,6 +282,9 @@ def validate(
     stop_atr: float = typer.Option(1.0, "--stop-atr"),
     target_r: float = typer.Option(2.0, "--target-r"),
     max_bars: int = typer.Option(48, "--max-bars", help="bar cap on holding period"),
+    min_bars_between: int = typer.Option(
+        0, "--min-bars-between", help="cooldown in bars between consecutive entries"
+    ),
     draws: int = typer.Option(1000, "--draws", help="Monte Carlo baseline draws"),
     detail: bool = typer.Option(False, "--detail", help="per-pattern breakdown"),
     config: Optional[Path] = typer.Option(None, "--config"),
@@ -299,6 +302,7 @@ def validate(
         as_of=datetime.now(timezone.utc),
         patterns=[pattern] if pattern else None,
         stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
+        min_bars_between_entries=min_bars_between,
         baseline_draws=draws,
     )
     if not reports:

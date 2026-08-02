@@ -86,6 +86,7 @@ def validate_series(
     stop_atr: float = 1.0,
     target_r: float = 2.0,
     max_bars: int = 48,
+    min_bars_between_entries: int = 0,
     baseline_draws: int = 200,
     bootstrap_iterations: int = 2000,
     use_intrabar: bool = True,
@@ -103,7 +104,10 @@ def validate_series(
             resolver = IntrabarResolver.from_frame(m1.to_polars())
 
     costs = costs or CostModel.for_symbol(cfg, symbol)
-    bt = BacktestConfig(stop_atr=stop_atr, target_r=target_r, max_bars=max_bars)
+    bt = BacktestConfig(
+        stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
+        min_bars_between_entries=min_bars_between_entries,
+    )
     split = make_split(df, in_sample_pct=float(cfg.backtest.get("in_sample_pct", 70)))
     min_n = int(cfg.backtest.get("min_sample_size", 30))
     prov_n = int(cfg.backtest.get("provisional_n", 100))
@@ -159,6 +163,7 @@ def validate_series(
             PatternReport(
                 pattern=name, symbol=symbol, timeframe=timeframe,
                 direction=spec.direction, stop_atr=stop_atr, target_r=target_r,
+                max_bars=max_bars, min_bars_between_entries=min_bars_between_entries,
                 in_sample=s_in, out_sample=s_out, in_sample_gross=s_in_gross,
                 gross_in=g_in, gross_out=g_out,
                 drag_in=drag, baseline=base, signals=res.signals_total,
@@ -186,7 +191,7 @@ def persist(con, reports, *, validated_at_ms: int) -> int:
         stats = SetupStats(
             setup=r.pattern, symbol=r.symbol, timeframe=r.timeframe,
             direction=r.direction, stop_atr=r.stop_atr, target_r=r.target_r,
-            max_bars=48, round_trip_bps=r.round_trip_bps,
+            max_bars=r.max_bars, round_trip_bps=r.round_trip_bps,
             n_in=r.in_sample.n, n_out=r.out_sample.n,
             gross_in=r.gross_in, gross_out=r.gross_out,
             net_in=r.in_sample.expectancy_r,

@@ -305,7 +305,7 @@ def test_benjamini_hochberg_rejects_a_lone_chance_hit():
         b = BaselineResult(1000, 100, 0.0, 0.0, p, -0.03, 0.03, 0.02)
         return PatternReport(
             pattern=f"p{p}", symbol="X", timeframe="5m", direction="long",
-            stop_atr=1.0, target_r=2.0,
+            stop_atr=1.0, target_r=2.0, max_bars=48,
             in_sample=compute([0.1] * 200, bootstrap_iterations=50),
             out_sample=compute([0.1] * 200, bootstrap_iterations=50),
             in_sample_gross=None, gross_in=0.02, gross_out=0.0, drag_in=-1.0,

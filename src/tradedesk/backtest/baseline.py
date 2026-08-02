@@ -117,13 +117,18 @@ def run_baseline(
             continue
         picks.sort()
 
-        # Same one-position-at-a-time rule the real backtest applies, so the baseline
-        # is subject to the identical constraint rather than getting more trades.
+        # Same one-position-at-a-time rule AND the same entry cooldown the real backtest
+        # applies, so the baseline is subject to identical constraints rather than
+        # getting more trades. A cooldown enforced on the pattern but not on the null
+        # would compare a spaced-out rule against an unspaced one.
         g_sum = n_sum = 0.0
         taken = 0
         busy_until = -1
+        last_entry = None
         for i in picks:
             if i <= busy_until:
+                continue
+            if last_entry is not None and (i + 1) - last_entry < bt.min_bars_between_entries:
                 continue
             o = outcomes.get(i)
             if o is None:
@@ -133,6 +138,7 @@ def run_baseline(
             n_sum += nr
             taken += 1
             busy_until = exit_idx
+            last_entry = i + 1
         if taken:
             null.append(g_sum / taken)
             null_net.append(n_sum / taken)

@@ -48,6 +48,7 @@ class PatternReport:
     direction: str
     stop_atr: float
     target_r: float
+    max_bars: int
     in_sample: Stats
     out_sample: Stats
     in_sample_gross: Stats | None
@@ -59,6 +60,7 @@ class PatternReport:
     trades: int
     slices: list[tuple[str, int, float | None, float | None]]
     round_trip_bps: float
+    min_bars_between_entries: int = 0
 
     #: Set by apply_multiple_testing_correction(). None until then.
     survives_correction: bool | None = None
@@ -121,9 +123,15 @@ def render(console: Console, reports: list[PatternReport]) -> None:
         return
 
     head = reports[0]
+    cooldown = (
+        f" · {head.min_bars_between_entries} bar min spacing"
+        if head.min_bars_between_entries
+        else ""
+    )
     console.print(
         f"[bold cyan]{head.symbol}[/bold cyan] {head.timeframe} · "
-        f"{head.stop_atr:g}×ATR stop · {head.target_r:g}R target · "
+        f"{head.stop_atr:g}×ATR stop · {head.target_r:g}R target "
+        f"({head.stop_atr * head.target_r:g}×ATR) · {head.max_bars} bar cap{cooldown} · "
         f"round trip {head.round_trip_bps:.0f} bps"
     )
     console.print(
