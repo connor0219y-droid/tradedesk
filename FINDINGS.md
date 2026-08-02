@@ -227,7 +227,7 @@ chart's 124 is a 15m figure.
 | gross expectancy | +0.0063R | +0.0405R |
 | gross profit factor | 1.011 | 1.080 |
 | Monte Carlo p (long / short) | 0.305 / 0.689 | 0.134 / 0.238 |
-| survives BH across 22 patterns | no | no |
+| survives BH across 26 patterns | no | no |
 | out-of-sample gross | +0.0079R / +0.0364R | +0.0445R / +0.0752R |
 | **net expectancy @ 248 bps** | **−10.21R** | **−5.22R** |
 
@@ -246,12 +246,38 @@ Worth noting: the observed 0.721 sits below *every* one of the 201 windows (mini
 also means the chart's two months were a bad draw even for a strategy whose long-run
 gross is marginally positive.
 
+### The RSI threshold was the weakest inference, and it does not matter
+
+RSI's role was the least-constrained assumption, so all three live readings are
+registered as their own detectors and corrected together — 26 patterns in the family,
+not a best-of-three. Combined long + short, four years:
+
+| RSI reading | 5m gross | 5m net | 15m gross | 15m net | 15m trades/2mo |
+|---|---|---|---|---|---|
+| >50 / <50 (midline) | +0.0063R | −10.21R | +0.0405R | −5.22R | 120 |
+| >55 / <45 (band) | +0.0015R | −10.20R | +0.0423R | −5.20R | 90 |
+| 50–70 / 30–50 (veto) | +0.0067R | −10.25R | +0.0387R | −5.25R | 118 |
+
+**Net expectancy is identical to two decimal places across all three.** Tightening to
+55/45 discards 25% of trades and buys nothing; the overbought veto removes ~1% of
+entries, because RSI above 70 at the moment of a 9/21 cross is rare. On 5m the band is
+actively *worse* (long gross +0.0032R → −0.0096R). Raw p ranges 0.134–0.810 across the
+six detectors; **0 survive BH on either timeframe**, and 15m produced no raw p<0.05 at
+all where chance alone gives ~1.3.
+
+The prettiest cell — 15m band-short, gross +0.0448R in-sample and +0.0993R out — is
+exactly the one to distrust: it is the best of six after the fact, and it fails
+correction. The variants are nested and highly correlated, which makes BH conservative
+here, so this is not the correction being harsh.
+
+The midline reading also reproduces the chart's trade count best (120 vs 124 per two
+months), so it stands as the reconstruction.
+
 Caveats specific to this test: the engine closes any open position at the midnight-ET
 session boundary, which the TradingView strategy does not — that affects 18.2% of 15m
 trades (5.9% on 5m) and is worth **−0.031R** on 15m, i.e. it makes this result slightly
 *pessimistic*, by about 0.6% of the cost drag. The 96/288-bar holding cap never binds;
-median holding period is 9–10 bars. RSI's confirmation threshold (the midline) is the
-least-constrained inferred parameter.
+median holding period is 9–10 bars.
 
 ---
 

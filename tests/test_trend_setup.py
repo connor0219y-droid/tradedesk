@@ -204,6 +204,54 @@ def test_touching_emas_that_separate_upward_count_as_a_cross():
     assert [i for i, v in enumerate(sig.to_list()) if v] == [2]
 
 
+def test_rsi_variants_differ_only_in_the_rsi_threshold():
+    """One cross bar, replayed at five RSI readings, against all three variants.
+
+    The point of the sensitivity study is that the variants differ in the RSI test and
+    nothing else, so this pins exactly which readings each admits:
+
+        RSI 48  below the midline                 -> none
+        RSI 52  midline yes, 55-band no           -> midline, veto
+        RSI 58  clears both                       -> all three
+        RSI 72  clears both, but overbought       -> midline, 55-band
+    """
+    variants = {
+        "midline": "ema_cross_trend_long",
+        "band55": "ema_cross_trend_rsi55_long",
+        "veto": "ema_cross_trend_veto_long",
+    }
+    admitted = {}
+    for rsi in (48.0, 52.0, 58.0, 72.0):
+        df = _signal_frame([
+            (105.0, 88.0, 90.0, 100.0, rsi),   # fast below slow
+            (106.0, 92.0, 90.0, 100.0, rsi),   # crosses up, above the 200 EMA
+        ])
+        admitted[rsi] = {
+            label for label, name in variants.items() if detect(df, name).to_list()[1]
+        }
+
+    assert admitted[48.0] == set()
+    assert admitted[52.0] == {"midline", "veto"}
+    assert admitted[58.0] == {"midline", "band55", "veto"}
+    assert admitted[72.0] == {"midline", "band55"}
+
+
+def test_rsi_variants_share_one_cross_definition():
+    """A bar failing the CROSS must be rejected by every variant regardless of RSI.
+
+    Guards the refactor: the cross and trend halves live in `_long`/`_short`, so a
+    variant that quietly grew its own copy would show up here.
+    """
+    rows = [
+        (105.0, 92.0, 90.0, 100.0, 60.0),   # already above -- no fresh cross
+        (106.0, 94.0, 90.0, 100.0, 60.0),
+    ]
+    df = _signal_frame(rows)
+    for name in ("ema_cross_trend_long", "ema_cross_trend_rsi55_long",
+                 "ema_cross_trend_veto_long"):
+        assert not any(detect(df, name).to_list()), name
+
+
 def test_no_signal_where_an_indicator_is_null():
     """Before EMA(200) warms up, `close > ema_200` is unknown -- not True.
 
