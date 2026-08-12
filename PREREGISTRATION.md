@@ -311,11 +311,31 @@ identical hours.
 time rule kept trades close enough to independent for a bootstrap interval to mean
 something. Pooling across 50 names breaks that: positions overlap in time and equities
 are cross-sectionally correlated through market beta, so the effective sample is smaller
-than the trade count suggests and a naive interval is too tight. Two things limit the
-damage — the null is pooled identically, so the correlation is present on both sides of
-the comparison, and the p-value comes from that matched null rather than from a
-parametric interval. The bootstrap CI is still reported, and it is still optimistic; it
-is not a gate.
+than the trade count suggests and a naive interval is too tight. The p-value comes from
+a matched null rather than from a parametric interval, and the bootstrap CI is reported
+but is optimistic and is not a gate.
+
+> **Correction, made after the run (2026-08-12).** The sentence that stood here claimed
+> "the null is pooled identically, so the correlation is present on both sides of the
+> comparison." **That is wrong**, and it overstated the method in the strategy's favour.
+> The null is *aggregated* identically, but it is *sampled* independently per symbol and
+> uniformly over each symbol's history within its time-of-day buckets — so it does not
+> reproduce the calendar clustering of the real signals, which fire on many names at once
+> during market-wide moves. The null's variance is therefore understated and the
+> time-series p-values are anti-conservative: too small, not too large.
+>
+> Scope, and why it does not change a verdict here. It applies **only to the 36
+> time-series tests**, none of which survived; if anything they should be read as weaker
+> still. It does **not** apply to the 6 cross-sectional tests, whose null shuffles ranks
+> within fixed rebalance dates and therefore preserves the calendar and cross-sectional
+> structure exactly — and both strategies that survived the correction were
+> cross-sectional. Empirically no inflation is visible either: 2 raw p<0.05 out of 36
+> where chance gives ~1.6.
+>
+> The fix would be a block bootstrap or date-matched sampling for the time-series null.
+> It is recorded here rather than quietly repaired because the original sentence was a
+> claim about rigour, and a claim about rigour that turns out to be false is worth more
+> as a correction than as a deletion.
 
 ## The full family, and the correction across it
 

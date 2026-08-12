@@ -24,6 +24,7 @@ import argparse
 import csv
 import sys
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,6 +62,21 @@ from tradedesk.universe import default as default_universe  # noqa: E402
 VENUE = "alpaca"
 DRAWS = 4000
 INTRADAY_LIST = REPO_ROOT / "universe" / "intraday50_2018_liquidity.csv"
+
+
+def _seed(*parts: str) -> int:
+    """A STABLE per-(detector, symbol) seed.
+
+    Not `hash()`. Python randomises string hashing per process unless PYTHONHASHSEED is
+    set, so `hash((detector, symbol))` produced a different seed on every run -- and with
+    it a different null, different p-values, and a result that could not be reproduced by
+    re-running the command that generated it. For a project whose entire claim is that
+    its numbers survive scrutiny, a non-reproducible p-value is a defect of the same
+    class as a lookahead bug: it fails silently and only shows up if someone checks.
+
+    crc32 is stable across processes, versions and platforms.
+    """
+    return zlib.crc32("|".join(parts).encode()) & 0x7FFFFFFF
 
 
 def intraday_names() -> list[str]:
@@ -122,7 +138,7 @@ def run_timeseries(con, cfg, symbols, timeframe, as_of, spreads):
             trades[n][sym] = res.trades
             part = symbol_null(df, res.trades, is_long=spec.is_long,
                                timeframe=timeframe, costs=costs, bt=bt, resolver=None,
-                               draws=DRAWS, seed=abs(hash((n, sym))) % (2**31))
+                               draws=DRAWS, seed=_seed(n, sym))
             if part:
                 nulls[n].append(part)
         if i % 10 == 0 or i == len(symbols):
