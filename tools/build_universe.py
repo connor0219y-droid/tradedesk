@@ -51,7 +51,11 @@ RAW = "https://en.wikipedia.org/w/index.php"
 TITLE = "List of S&P 500 companies"
 UA = "tradedesk/0.1 (research; contact via repository)"
 
-START = date(2018, 8, 1)
+# Starts two months BEFORE the study window so a membership snapshot exists that
+# strictly precedes it. Without that, selecting the intraday names as of the study
+# start has no constituent list to use except one dated after it -- a small
+# membership lookahead, and an avoidable one.
+START = date(2018, 6, 1)
 END = date(2026, 8, 1)
 
 #: Ticker-shaped tokens. Class-B share tickers legitimately carry a dot (BRK.B) or a
@@ -114,6 +118,26 @@ def revision_as_of(when: date) -> tuple[int, str] | None:
         if revs:
             return int(revs[0]["revid"]), revs[0]["timestamp"]
     return None
+
+
+def normalise_ticker(ticker: str) -> str:
+    """Canonicalise class-share spelling to the dot form.
+
+    THE BUG THIS EXISTS TO PREVENT, found while backfilling. Wikipedia spelled Berkshire
+    and Brown-Forman as `BRK-B`/`BF-B` for three snapshots (2018-11-30 to 2019-02-28)
+    and `BRK.B`/`BF.B` for the other 95. Untreated, the universe carries BOTH as
+    distinct tickers, which does two things and neither is loud:
+
+      * two phantom symbols that no data provider will serve -- Alpaca returns HTTP 400
+        `invalid symbol` for the hyphen form, which at least fails visibly;
+      * a THREE-MONTH HOLE in the membership of two real S&P 500 names, during which the
+        cross-sectional universe silently excludes Berkshire and includes a ticker with
+        no bars behind it. That part fails quietly, which is worse.
+
+    Dot is the canonical form here because it is what the data provider accepts:
+    `BRK.B` returns bars, `BRK-B` is rejected.
+    """
+    return ticker.replace("-", ".")
 
 
 def _clean(cell: str) -> str:
@@ -193,7 +217,10 @@ def tickers_from_wikitext(text: str) -> list[str]:
         if not token:
             continue
         cand = token[0].rstrip(",.")
-        if _TICKER.match(cand) and cand not in seen:
+        if not _TICKER.match(cand):
+            continue
+        cand = normalise_ticker(cand)
+        if cand not in seen:
             seen.add(cand)
             out.append(cand)
     return out

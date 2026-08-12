@@ -40,6 +40,12 @@ DAYS_PER_MONTH = 21
 DAYS_PER_YEAR = 252
 
 
+#: Ranking variables this engine knows how to build. Each is computed so that RANKING
+#: ASCENDING puts the strategy's disfavoured names at the bottom, which keeps `sign`
+#: meaning the same thing for every strategy.
+SIGNAL_KINDS = frozenset({"return", "nearness_52w", "realised_vol"})
+
+
 class CrossSectionError(Exception):
     """A cross-sectional strategy is misdeclared, or the panel cannot support it."""
 
@@ -64,6 +70,12 @@ class CrossSectionalSpec:
     sign: int = 1
     #: Minimum names required at a rebalance for that date to be used at all.
     min_names: int = 50
+    #: What the names are RANKED ON. Most sources rank on a trailing return, but not
+    #: all: George & Hwang rank on nearness to the 52-week high, and the low-volatility
+    #: literature ranks on realised volatility. Carried on the spec rather than applied
+    #: by the caller, so a strategy cannot be run against a ranking variable its source
+    #: never used.
+    signal_kind: str = "return"
 
     def __post_init__(self) -> None:
         if self.quantiles < 2:
@@ -72,6 +84,11 @@ class CrossSectionalSpec:
             raise CrossSectionError(f"{self.name}: windows must be positive")
         if self.sign not in (1, -1):
             raise CrossSectionError(f"{self.name}: sign must be +1 or -1")
+        if self.signal_kind not in SIGNAL_KINDS:
+            raise CrossSectionError(
+                f"{self.name}: unknown signal_kind {self.signal_kind!r}; "
+                f"known: {sorted(SIGNAL_KINDS)}"
+            )
 
 
 @dataclass
@@ -135,9 +152,30 @@ def _signal_frame(panel: pl.DataFrame, spec: CrossSectionalSpec) -> pl.DataFrame
     """
     c = pl.col("close")
     start = spec.lookback_days + spec.skip_days
-    return panel.with_columns(
+
+    if spec.signal_kind == "return":
         # Formation: close[t - skip] / close[t - skip - lookback] - 1
-        (c.shift(spec.skip_days) / c.shift(start) - 1.0).over("symbol").alias("signal"),
+        signal = (c.shift(spec.skip_days) / c.shift(start) - 1.0).over("symbol")
+    elif spec.signal_kind == "nearness_52w":
+        # George & Hwang: price relative to its own 52-week high. A name at 0.99 of its
+        # high ranks above one at 0.60 regardless of how either got there, which is the
+        # claim that distinguishes this from a trailing-return ranking.
+        high = (
+            pl.col("high") if "high" in panel.columns else c
+        ).rolling_max(window_size=spec.lookback_days, min_samples=spec.lookback_days)
+        signal = (c / high.over("symbol")).over("symbol")
+    else:  # realised_vol
+        # Standard deviation of daily log returns over the formation window. NEGATED so
+        # that ascending rank still runs from "worst by this strategy's lights" to
+        # "best" -- without that, `sign` would silently mean the opposite thing here
+        # than it does everywhere else.
+        ret = (c / c.shift(1)).log()
+        signal = -(
+            ret.rolling_std(window_size=spec.lookback_days, min_samples=spec.lookback_days)
+        ).over("symbol")
+
+    return panel.with_columns(
+        signal.alias("signal"),
         (c.shift(-spec.rebalance_days) / c - 1.0).over("symbol").alias("fwd"),
     )
 

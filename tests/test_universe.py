@@ -129,3 +129,33 @@ def test_an_empty_file_is_refused(tmp_path):
     p.write_text("# header only\nas_of,ticker,revid\n")
     with pytest.raises(UniverseError, match="no membership rows"):
         load(p)
+
+
+def test_class_share_tickers_have_a_single_canonical_spelling(members):
+    """Wikipedia spelled Berkshire as BRK-B for three snapshots and BRK.B for 95.
+
+    Untreated, the universe carries both as distinct tickers. Two consequences, and the
+    quiet one is the problem: two phantom symbols no provider will serve (Alpaca returns
+    HTTP 400, which at least fails loudly), and a THREE-MONTH HOLE in the membership of
+    two real S&P 500 names, during which the cross-sectional universe silently drops
+    Berkshire and includes a ticker with no bars behind it.
+
+    Dot is canonical because it is what the data provider accepts.
+    """
+    everything = members.all_tickers()
+    assert "BRK.B" in everything and "BF.B" in everything
+    assert "BRK-B" not in everything, "hyphen spelling survived normalisation"
+    assert "BF-B" not in everything
+    assert not [t for t in everything if "-" in t], "no ticker should carry a hyphen"
+
+
+def test_a_class_share_name_has_no_membership_hole(members):
+    """The specific damage the spelling split caused, asserted directly.
+
+    Berkshire was in the index continuously across this window, so every snapshot from
+    its first to its last must contain it. A gap means the spelling split reopened.
+    """
+    lo, hi = members.tenure("BRK.B")
+    inside = [d for d in members.dates if lo <= d <= hi]
+    missing = [d for d in inside if "BRK.B" not in members.snapshots[d]]
+    assert missing == [], f"BRK.B absent from {len(missing)} snapshots: {missing[:5]}"

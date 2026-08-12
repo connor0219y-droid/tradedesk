@@ -190,3 +190,175 @@ If no strategy clears all five gates, the finding is that 18 published strategie
 faithfully enough to be worth arguing with, do not produce a demonstrated edge on BTC,
 ETH or SOL under obtainable costs. That is a real answer and it will be written up as
 one — not as an invitation to widen the family until something passes.
+
+---
+
+# Part 2: the equity study
+
+Written 2026-08-12, **before any equity backtest was run**. The bars were still being
+fetched when this section was committed; nothing below was informed by a result.
+
+Part 1 tested 18 published strategies on BTC, ETH and SOL. That was a substitution: most
+of those papers studied equities, and crypto was the data on hand. Part 2 runs the same
+family on the asset class the sources actually studied, and adds the strategies Part 1
+had to exclude.
+
+## What changes, and why each change matters
+
+**Costs fall by two orders of magnitude.** Part 1 lived under a 248 bps round trip that
+buried every edge by a factor of 10–100. US equities are commission-free; the round trip
+is spread plus slippage, estimated per name from its own bars (Corwin-Schultz 2012, see
+`backtest/equity_costs.py`) and typically single-digit basis points. This is the first
+time in this project that a real edge would have room to survive its own execution.
+
+**Cross-sectional strategies become possible.** Three crypto symbols cannot support a
+quintile sort. A 500-name universe can. The exclusion recorded in Part 1 is lifted.
+
+**The sessions are real.** "The first half-hour return" now means the first half hour
+after an actual opening bell, not the first half hour of a synthetic ET day. Part 1's
+intraday detectors were testing the shape of a rule; here they test the rule.
+
+## The universe, and the bias it is built to avoid
+
+Point-in-time S&P 500 membership, 96 month-end snapshots. **681 distinct tickers against
+~503 at any one moment** — so a today's-constituents universe would omit 26% of the
+sample, and not a random 26%: it is the acquired, the demoted and the failed. SIVB and
+SBNY leave after February 2023, FRC after April 2023, TWTR after September 2022.
+
+Intraday coverage is the 50 names with the highest median daily dollar volume over
+**2018-01-01 to 2018-07-31 — strictly before the study window opens.** Ranking on
+today's liquidity, or on the full sample, selects the names that went on to be heavily
+traded, which is the same error as using today's index members.
+
+Three limits, restated here rather than left in a docstring: editor lag of a few days
+around index changes; no CIK-level continuity, so a reused ticker is indistinguishable
+by identifier alone; month-end sampling, so a name added and dropped inside one month is
+invisible.
+
+## Data integrity, decided before the data was stored
+
+Alpaca serves delisted symbols, and for some of them it serves fabrications: SBNY has
+509 zero-volume bars frozen at 70.00 for two years after the bank was seized, and CA has
+1,323 frozen at its buyout price followed by a different company on the same ticker.
+The rules, fixed in advance:
+
+1. A zero-volume bar is **absent, not flat**. Kept, a frozen price turns a total loss
+   into a flat position — SBNY would book 0% instead of −100%, which is the survivorship
+   bias re-entering through the bars after being removed from the universe.
+2. Each ticker is **clipped to its index tenure**, which is what defeats ticker reuse.
+   The buffer is asymmetric — 420 days leading, 10 trailing — because formation windows
+   reach backwards and reuse arrives forwards.
+3. Residual discontinuities are **flagged, not stitched**.
+
+Verified on live data: SIVB keeps all 1,159 bars and its real −60.4% collapse; CA's
+fabricated −43% day disappears.
+
+## The added family: cross-sectional strategies
+
+Long the top quintile, short the bottom, equal-weighted, monthly rebalance, on the
+point-in-time universe. Registered **before** running, as Part 1's family was.
+
+| # | Strategy | Source | Formation | Skip | Sign |
+|---|---|---|---|---|---|
+| 19 | `xs_momentum_12_1` | Jegadeesh & Titman (1993), *JF* 48:65 | 12 months | 1 month | long winners |
+| 20 | `xs_momentum_6_1` | Jegadeesh & Titman (1993), the 6-month leg | 6 months | 1 month | long winners |
+| 21 | `xs_reversal_1m` | Jegadeesh (1990), *JF* 45:881 | 1 month | 0 | long losers |
+| 22 | `xs_reversal_long_term` | De Bondt & Thaler (1985), *JF* 40:793 | 36 months | 1 month | long losers |
+| 23 | `xs_52w_high` | George & Hwang (2004), *JF* 59:2145 | nearness to the 52-week high | 0 | long nearest |
+| 24 | `xs_low_volatility` | Ang, Hodrick, Xing & Zhang (2006), *JF* 61:259 | 12-month realised vol | 0 | long lowest |
+
+Six strategies, one configuration each. Quintiles (not deciles) fixed in advance: with
+~500 names a quintile is ~100 per leg, and testing both and reporting the better is the
+forking path this document exists to close.
+
+**The null is random-rank portfolios** — same eligible names, same rebalance dates, same
+holding period, same costs, ranks shuffled. A long-short book of 200 diversified
+positions produces a smooth equity curve whether or not the signal means anything, so
+"it looks like a real strategy" is not evidence.
+
+## Horizons, universes, and how the 18 time-series strategies are scored
+
+**Horizons.** Session-anchored strategies on **5m**, swing strategies on **1d**. Part 1's
+4h leg has no equity analogue — an equity session is 6.5 hours, so a 4h bar is neither
+intraday nor daily — and is dropped rather than reinterpreted. That leaves **10 detectors
+at 5m** and **26 at 1d**, the same partition Part 1 declared.
+
+**Two universes, for two different reasons.**
+
+- *Time-series strategies* run on the **50 names selected by 2018 liquidity**, at both
+  horizons. These are per-instrument rules; breadth adds symbols, not information, and
+  using the same 50 at 5m and 1d is what makes the two horizons comparable to each other.
+- *Cross-sectional strategies* run on the **full 681-name point-in-time universe**,
+  daily. They need breadth: that is the entire point of a quintile sort, and it is the
+  thing three crypto symbols could not provide.
+
+**Trades are POOLED ACROSS SYMBOLS, one test per strategy.** This is the significant
+departure from Part 1 and it is a decision about what is being claimed. Part 1 tested
+three symbols and treated each as its own family, which was tractable. Here, scoring
+26 detectors against 50 symbols separately would be 1,300 tests at 1d alone, and a
+correction sized for that has no power left — the smallest Benjamini-Hochberg threshold
+would be 4×10⁻⁵, below what any affordable number of Monte Carlo draws can resolve.
+
+More importantly, per-symbol scoring answers a question nobody asked. Connors does not
+claim RSI(2) works on Cisco; he claims it works on equities. So every detector produces
+ONE pooled sample — all trades from all 50 names — and one test. The null is pooled the
+same way: random entries drawn per symbol, matched to that symbol's own time-of-day
+histogram and trade count, then pooled into a single null mean per draw. The strategy and
+its null therefore face identical symbol composition, identical trade counts and
+identical hours.
+
+**What pooling costs, stated rather than discovered later.** Part 1's one-position-at-a-
+time rule kept trades close enough to independent for a bootstrap interval to mean
+something. Pooling across 50 names breaks that: positions overlap in time and equities
+are cross-sectionally correlated through market beta, so the effective sample is smaller
+than the trade count suggests and a naive interval is too tight. Two things limit the
+damage — the null is pooled identically, so the correlation is present on both sides of
+the comparison, and the p-value comes from that matched null rather than from a
+parametric interval. The bootstrap CI is still reported, and it is still optimistic; it
+is not a gate.
+
+## The full family, and the correction across it
+
+**42 tests. One Benjamini-Hochberg correction across all 42.**
+
+| family | tests | what each test is |
+|---|---|---|
+| time-series, 5m | 10 | one pooled sample per detector, 50 symbols |
+| time-series, 1d | 26 | one pooled sample per detector, 50 symbols |
+| cross-sectional, 1d | 6 | one long-short portfolio per strategy, 681 symbols |
+
+The two families are **reported separately**, because a per-trade R-multiple and a
+per-month portfolio return are not the same quantity and putting them in one column
+would invite exactly the wrong comparison. But the correction is applied **across all 42
+together**, because 42 is the number of tests actually run and looked at. Correcting
+within each family separately would be the garden of forking paths wearing a lab coat:
+two corrections at FDR 0.05 do not control the error rate over the union.
+
+Benjamini-Hochberg at FDR 0.05 over m = 42 gives a smallest threshold of
+**0.05/42 = 0.00119**. The baseline p-value is `(k+1)/(draws+1)`, so runs use **4,000
+draws**, fixed here, and 1/4001 = 0.00025 resolves comfortably below the line.
+
+**Anything that scores goes in the family.** If a detector produces no trades, or fails
+the sample gate, it is reported as such and still counted in m — dropping empty tests
+from the denominator after the fact would inflate every surviving p-value.
+
+## The decision rule, unchanged from Part 1
+
+All five gates, restated so none can be relaxed after seeing a number: in- and
+out-of-sample n ≥ 30; beats its own matched random baseline at p < 0.05; survives
+Benjamini-Hochberg at FDR 0.05 **across all 42 tests**; positive net expectancy after
+costs; and the same sign in-sample and out-of-sample.
+
+For the cross-sectional strategies the gates read across with one substitution: the
+sample unit is a rebalance period rather than a trade, so n is the number of periods and
+the out-of-sample split is chronological on the same 70/30 boundary. Cross-sectional
+results are reported in **per-period portfolio returns, not R-multiples** — there is no
+stop, so there is no R.
+
+## What would count as a null result
+
+Same standard as Part 1. If the strategies fail on the asset class their authors studied,
+with realistic costs, a survivorship-free universe and real sessions, that is a stronger
+negative than Part 1 produced and it will be written up as one. And if something does
+survive here, the honest reading is that Part 1's negative was about crypto and costs
+rather than about the strategies — which is exactly why this part is worth running.

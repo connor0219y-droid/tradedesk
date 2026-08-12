@@ -204,3 +204,109 @@ def test_build_panel_handles_an_empty_universe():
     empty = build_panel({})
     assert empty.is_empty()
     assert run_cross_section(empty, MOM) is None
+
+
+# ------------------------------------------------- the declared cross-sectional family
+
+
+def test_the_declared_family_matches_the_pre_registration():
+    """Six strategies, one configuration each, as PREREGISTRATION.md Part 2 declares.
+
+    A guard on the thing the document actually promises. Adding a seventh, or a second
+    configuration of an existing one, must fail here and force the question of whether
+    the correction still covers the family that was declared.
+    """
+    from tradedesk.patterns.cross_sectional import CROSS_SECTIONAL, by_name, names
+
+    assert len(CROSS_SECTIONAL) == 6
+    assert len(set(names())) == 6, "duplicate strategy name"
+    for spec in CROSS_SECTIONAL:
+        assert spec.source, f"{spec.name} has no citation"
+        assert spec.quantiles == 5, "quintiles were fixed in advance, not deciles"
+        assert spec.rebalance_days == 21, "monthly rebalance was fixed in advance"
+    with pytest.raises(KeyError):
+        by_name("xs_not_a_strategy")
+
+
+def test_momentum_skips_a_month_and_reversal_does_not():
+    """The one-month skip is what separates these two opposing effects.
+
+    Momentum skips it precisely to avoid short-term reversal; short-term reversal IS
+    that effect. A momentum spec without the skip measures both at once and is not the
+    published strategy -- and a reversal spec WITH one would delete itself.
+    """
+    from tradedesk.patterns.cross_sectional import by_name
+
+    assert by_name("xs_momentum_12_1").skip_days == 21
+    assert by_name("xs_momentum_6_1").skip_days == 21
+    assert by_name("xs_reversal_1m").skip_days == 0
+    assert by_name("xs_momentum_12_1").sign == 1
+    assert by_name("xs_reversal_1m").sign == -1
+
+
+def test_alternative_ranking_variables_are_declared_on_the_spec():
+    """Two of the six do not rank on a trailing return."""
+    from tradedesk.patterns.cross_sectional import by_name
+
+    assert by_name("xs_52w_high").signal_kind == "nearness_52w"
+    assert by_name("xs_low_volatility").signal_kind == "realised_vol"
+    assert by_name("xs_momentum_12_1").signal_kind == "return"
+    with pytest.raises(CrossSectionError, match="unknown signal_kind"):
+        CrossSectionalSpec(name="x", source="t", lookback_days=252, signal_kind="vibes")
+
+
+def test_nearness_to_the_52_week_high_ranks_on_position_not_on_gain():
+    """George & Hwang's claim, and what makes it distinct from momentum.
+
+    A stock that rose 5% but sits at its 52-week high must rank ABOVE one that rose 50%
+    and sits well below its own high. A trailing-return ranking gets this backwards.
+    """
+    from tradedesk.backtest.cross_section import _signal_frame
+
+    spec = CrossSectionalSpec(
+        name="n", source="t", lookback_days=120, skip_days=0,
+        rebalance_days=21, signal_kind="nearness_52w", min_names=1,
+    )
+    days = [date(2020, 1, 1) + timedelta(days=i) for i in range(200)]
+    rows = []
+    for i, d in enumerate(days):
+        # AT_HIGH grinds steadily upward and ends AT its own high: +10% total.
+        rows.append({"symbol": "AT_HIGH", "session_date": d, "close": 100.0 + i * 0.05})
+        # BIG_GAIN doubles to 200 by day 100, then slides back to 130 -- a far larger
+        # trailing gain, but sitting well below its own high when measured.
+        close = 100.0 + i if i <= 100 else 200.0 - (i - 100) * 0.7
+        rows.append({"symbol": "BIG_GAIN", "session_date": d, "close": close})
+    sig = _signal_frame(pl.DataFrame(rows).sort(["symbol", "session_date"]), spec)
+    last = sig.filter(pl.col("session_date") == days[-1]).drop_nulls("signal")
+    got = dict(zip(last["symbol"].to_list(), last["signal"].to_list()))
+    # BIG_GAIN has by far the larger trailing return, so a return-ranking would put it
+    # first. Nearness must not.
+    assert got["BIG_GAIN"] < 0.8, got
+    assert got["AT_HIGH"] > got["BIG_GAIN"], got
+
+
+def test_realised_vol_is_negated_so_sign_keeps_its_meaning():
+    """Ranked ascending, the calmest name must sit at the TOP.
+
+    Without the negation `sign` would silently mean the opposite thing for this strategy
+    than for every other one -- and the result would look plausible either way.
+    """
+    from tradedesk.backtest.cross_section import _signal_frame
+
+    spec = CrossSectionalSpec(
+        name="v", source="t", lookback_days=60, skip_days=0,
+        rebalance_days=21, signal_kind="realised_vol", min_names=1,
+    )
+    rng = random.Random(4)
+    days = [date(2020, 1, 1) + timedelta(days=i) for i in range(200)]
+    rows = []
+    calm = wild = 100.0
+    for d in days:
+        calm *= 1 + rng.gauss(0, 0.001)
+        wild *= 1 + rng.gauss(0, 0.05)
+        rows.append({"symbol": "CALM", "session_date": d, "close": calm})
+        rows.append({"symbol": "WILD", "session_date": d, "close": wild})
+    sig = _signal_frame(pl.DataFrame(rows).sort(["symbol", "session_date"]), spec)
+    last = sig.filter(pl.col("session_date") == days[-1]).drop_nulls("signal")
+    got = dict(zip(last["symbol"].to_list(), last["signal"].to_list()))
+    assert got["CALM"] > got["WILD"], got
