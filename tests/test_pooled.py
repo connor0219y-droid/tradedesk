@@ -13,6 +13,7 @@ import pytest
 from tradedesk.backtest.pooled import (
     SymbolNull,
     apply_correction,
+    calendar_boundary,
     pool_null,
     split_trades,
 )
@@ -50,24 +51,49 @@ def test_pooled_null_skips_draws_where_nothing_traded():
     assert pooled == [1.0]
 
 
-def test_the_holdout_is_one_calendar_boundary_across_all_symbols():
-    """A per-symbol percentile split would blend 2019 for one name with 2025 for
-    another, smearing any regime effect across both halves instead of holding it out."""
-    trades = [_T(1000 + i) for i in range(100)]
-    in_s, out_s = split_trades(trades, in_sample_pct=70)
-    assert len(in_s) == 70 and len(out_s) == 30
-    assert max(t.signal_ms for t in in_s) < min(t.signal_ms for t in out_s)
+def test_the_boundary_is_calendar_time_not_trade_density():
+    """The bug this replaces: the cut was the signal time of the 70th-percentile TRADE.
+
+    That is one instant, so symbols did share it -- but WHICH instant was decided by
+    trade density. A detector firing often on three busy names let those names drag the
+    cut, so two detectors in the same family were held out against different spans of
+    market history. Deriving it from the calendar makes the holdout the same period for
+    everything.
+
+    Here 90 of 100 trades are crammed into the first tenth of the window. A
+    trade-percentile split would cut inside that cluster; a calendar split must not.
+    """
+    span_lo, span_hi = 0, 1_000_000
+    boundary = calendar_boundary(span_lo, span_hi, in_sample_pct=70)
+    assert boundary == 700_000, "boundary must be 70% of the calendar span"
+
+    clustered = [_T(i * 100) for i in range(90)] + [_T(900_000 + i * 100) for i in range(10)]
+    in_s, out_s = split_trades(clustered, boundary_ms=boundary)
+    assert len(in_s) == 90 and len(out_s) == 10
+    assert max(t.signal_ms for t in in_s) < boundary <= min(t.signal_ms for t in out_s)
+
+
+def test_the_boundary_does_not_move_with_the_detector():
+    """Two detectors with wildly different trade counts must share one holdout."""
+    boundary = calendar_boundary(0, 1_000_000, in_sample_pct=70)
+    busy = [_T(i * 1000) for i in range(1000)]
+    sparse = [_T(i * 100_000) for i in range(10)]
+    b_in, b_out = split_trades(busy, boundary_ms=boundary)
+    s_in, s_out = split_trades(sparse, boundary_ms=boundary)
+    assert all(t.signal_ms < boundary for t in b_in + s_in)
+    assert all(t.signal_ms >= boundary for t in b_out + s_out)
 
 
 def test_split_is_chronological_regardless_of_input_order():
+    boundary = calendar_boundary(0, 1000, in_sample_pct=50)
     trades = [_T(500), _T(100), _T(900), _T(300)]
-    in_s, out_s = split_trades(trades, in_sample_pct=50)
+    in_s, out_s = split_trades(trades, boundary_ms=boundary)
     assert [t.signal_ms for t in in_s] == [100, 300]
     assert [t.signal_ms for t in out_s] == [500, 900]
 
 
 def test_empty_input_is_handled():
-    assert split_trades([], in_sample_pct=70) == ([], [])
+    assert split_trades([], boundary_ms=500) == ([], [])
     assert pool_null([], draws=10) == []
 
 

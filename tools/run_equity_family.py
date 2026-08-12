@@ -44,6 +44,7 @@ from tradedesk.backtest.equity_costs import (  # noqa: E402
 from tradedesk.backtest.pooled import (  # noqa: E402
     apply_correction,
     build_report,
+    calendar_boundary,
     symbol_null,
 )
 from tradedesk.backtest.validate import _bt_for  # noqa: E402
@@ -56,11 +57,19 @@ from tradedesk.patterns import REGISTRY, detect, registered  # noqa: E402
 from tradedesk.patterns.cross_sectional import CROSS_SECTIONAL  # noqa: E402
 from tradedesk.patterns.regime import add_regime_columns  # noqa: E402
 from tradedesk.resample import read_bars_any  # noqa: E402
-from tradedesk.timeutil import tf_ms  # noqa: E402
+from tradedesk.timeutil import tf_ms, to_ms  # noqa: E402
 from tradedesk.universe import default as default_universe  # noqa: E402
 
 VENUE = "alpaca"
 DRAWS = 4000
+
+#: The DECLARED study window. Bars are fetched from 420 days earlier so formation
+#: windows are warm on day one, but a trade signalled during that warmup is outside the
+#: window PREREGISTRATION.md declares, and was being counted. Restricting here also
+#: makes the holdout boundary a fraction of the declared window rather than of whatever
+#: span of warmup happened to be fetched.
+STUDY_START = datetime(2018, 8, 1, tzinfo=timezone.utc)
+STUDY_END = datetime(2026, 8, 1, tzinfo=timezone.utc)
 INTRADAY_LIST = REPO_ROOT / "universe" / "intraday50_2018_liquidity.csv"
 
 
@@ -118,6 +127,13 @@ def run_timeseries(con, cfg, symbols, timeframe, as_of, spreads):
     run_bt = BacktestConfig()
     tfms = tf_ms(timeframe)
 
+    # One boundary, fixed by the calendar, shared by every detector and every symbol.
+    lo, hi = to_ms(STUDY_START), to_ms(STUDY_END)
+    boundary = calendar_boundary(
+        lo, hi, in_sample_pct=float(cfg.backtest.get("in_sample_pct", 70))
+    )
+    print(f"  holdout boundary: {datetime.fromtimestamp(boundary/1000, timezone.utc):%Y-%m-%d}")
+
     for i, sym in enumerate(symbols, 1):
         df = load_symbol(con, cfg, sym, timeframe, as_of)
         if df is None or df.height < 300:
@@ -133,10 +149,17 @@ def run_timeseries(con, cfg, symbols, timeframe, as_of, spreads):
             res = run_backtest(df, sig, is_long=spec.is_long, timeframe=timeframe,
                                costs=costs, bt=bt, resolver=None)
             signals[n] += res.signals_total
-            if not res.trades:
+            # Trades signalled during the warmup are outside the declared window.
+            in_window = [t for t in res.trades if lo <= t.signal_ms < hi]
+            if not in_window:
                 continue
-            trades[n][sym] = res.trades
-            part = symbol_null(df, res.trades, is_long=spec.is_long,
+            trades[n][sym] = in_window
+            # The null is matched to the IN-SAMPLE trades, because that is the sample
+            # the p-value scores and the gates read.
+            in_sample = [t for t in in_window if t.signal_ms < boundary]
+            if not in_sample:
+                continue
+            part = symbol_null(df, in_sample, is_long=spec.is_long,
                                timeframe=timeframe, costs=costs, bt=bt, resolver=None,
                                draws=DRAWS, seed=_seed(n, sym))
             if part:
@@ -155,8 +178,7 @@ def run_timeseries(con, cfg, symbols, timeframe, as_of, spreads):
         reports.append(build_report(
             n, timeframe=timeframe, direction=spec.direction,
             trades_by_symbol=trades[n], null_parts=nulls[n], signals=signals[n],
-            bt=bt, round_trip_bps=rt, draws=DRAWS,
-            in_sample_pct=float(cfg.backtest.get("in_sample_pct", 70)),
+            bt=bt, round_trip_bps=rt, draws=DRAWS, boundary_ms=boundary,
             min_n=int(cfg.backtest.get("min_sample_size", 30)),
             provisional_n=int(cfg.backtest.get("provisional_n", 100)),
             bootstrap_iterations=2000,

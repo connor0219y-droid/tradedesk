@@ -287,27 +287,35 @@ def run_cross_section(
     gross_vals = [g for _, g, _ in per_period]
     net_vals = [n for _, _, n in per_period]
     gross_mean = sum(gross_vals) / len(gross_vals)
-    net_mean = sum(net_vals) / len(net_vals)
-    t_stat = _t_stat(gross_vals)
-
-    null = _random_rank_null(snapshots, spec, draws=draws, seed=seed)
-    p = low = high = null_mean = None
-    if null:
-        null.sort()
-        at_least = sum(1 for v in null if v >= gross_mean)
-        p = (at_least + 1) / (len(null) + 1)
-        null_mean = sum(null) / len(null)
-        low = null[int(0.025 * (len(null) - 1))]
-        high = null[int(0.975 * (len(null) - 1))]
 
     # Chronological holdout on the rebalance dates, the same 70/30 boundary the
     # event-driven side uses. One boundary for the whole panel, not per strategy.
+    # Computed BEFORE the null, which is scored against the in-sample half.
     cut = int(len(per_period) * in_sample_pct / 100.0)
     in_p, out_p = per_period[:cut], per_period[cut:]
     g_in = sum(g for _, g, _ in in_p) / len(in_p) if in_p else None
     g_out = sum(g for _, g, _ in out_p) / len(out_p) if out_p else None
     n_in_m = sum(n for _, _, n in in_p) / len(in_p) if in_p else None
     n_out_m = sum(n for _, _, n in out_p) / len(out_p) if out_p else None
+    net_mean = sum(net_vals) / len(net_vals)
+    t_stat = _t_stat(gross_vals)
+
+    # SCORED ON THE IN-SAMPLE PERIODS, for the same reason the event-driven side is:
+    # every gate reads in-sample statistics, so a p-value computed over the full sample
+    # tests something the gates never look at and lets the holdout leak into the
+    # significance test. The null is restricted to the same snapshots.
+    in_snaps = snapshots[:cut]
+    null = _random_rank_null(in_snaps, spec, draws=draws, seed=seed)
+    p = low = high = null_mean = None
+    if null and g_in is not None:
+        null.sort()
+        at_least = sum(1 for v in null if v >= g_in)
+        p = (at_least + 1) / (len(null) + 1)
+        null_mean = sum(null) / len(null)
+        low = null[int(0.025 * (len(null) - 1))]
+        high = null[int(0.975 * (len(null) - 1))]
+
+
 
     counts = sorted(name_counts)
     return CrossSectionalResult(

@@ -40,8 +40,8 @@ the four that matter most:
    p < 0.05 out of 105 scored tests where chance produces ~5.3, and zero survivors**.
 4. **Neither does removing costs entirely.** On equities the drag falls from −17.7 R to
    **−0.011 R** — from 1,770% of a risk unit to 1.1% — on a survivorship-free universe of
-   681 names with real opening bells. **42 pre-registered tests, 2 survive the
-   correction, and neither survives inspection.** The closest thing to an edge, a
+   681 names with real opening bells. **42 pre-registered tests, 3 survive the
+   correction, and none survives the decision rule.** The closest thing to an edge, a
    low-volatility quintile sort, has a mean of +0.57%/month and a **median of −0.15%**:
    remove its five best months out of ninety-six and the sign flips.
 

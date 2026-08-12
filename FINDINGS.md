@@ -548,71 +548,95 @@ now have positive net expectancy, which never happened once in findings 1-8. Eve
 
 ### Time-series: 36 tests, 0 survivors
 
-**2 raw p < 0.05 where chance alone produces ~1.6.** Not one survives Benjamini-Hochberg,
-and both fail elsewhere anyway:
+**2 raw p < 0.05 across the 42-test family, where chance alone produces ~2.1.** Exactly
+chance. None survives the correction, and both fail elsewhere:
 
-| detector | tf | n in/out | gross in → out | p |
-|---|---|---|---|---|
-| `crypto_wk_mom_short` | 1d | 2687 / 1157 | −0.0156 → −0.0418 | 0.030 |
-| `momentum_pinball_short` | 5m | 704 / 302 | +0.0480 → **−0.0551** | 0.043 |
+| detector | tf | n in/out | gross in → out | p | sign held |
+|---|---|---|---|---|---|
+| `momentum_pinball_short` | 5m | 526 / 390 | +0.0885 → **−0.0484** | 0.0050 | no |
+| `crypto_wk_mom_short` | 1d | 2380 / 974 | −0.0161 → −0.0364 | 0.0312 | yes, but negative |
 
-The first is negative in both halves; the second flips sign out of sample. On the asset
-class these rules were written for, with real sessions and costs 85× lower, the answer
-is the same one crypto gave.
+`momentum_pinball_short` misses the BH threshold at its rank by 0.0002 (0.00500 against
+0.00476) and flips sign out of sample anyway. On the asset class these rules were written
+for, with real sessions and costs 85× lower, the answer is the one crypto gave.
 
-### Cross-sectional: 2 survive the correction, 0 survive contact
+### Cross-sectional: 3 survive the correction, 0 survive the gates
 
-| strategy | n | gross/mo | net/mo | in → out | turnover | p | BH |
-|---|---|---|---|---|---|---|---|
-| `xs_low_volatility` | 96 | +0.57% | +0.57% | +0.37% → +1.05% | 0.08 | **0.00025** | **survives** |
-| `xs_reversal_1m` | 96 | +0.35% | +0.34% | +0.55% → −0.09% | 0.58 | **0.0020** | **survives** |
-| `xs_momentum_12_1` | 96 | +0.24% | +0.23% | −0.06% → +0.91% | 0.24 | 0.026 | no |
-| `xs_momentum_6_1` | 96 | +0.20% | +0.19% | −0.11% → +0.91% | 0.32 | 0.048 | no |
-| `xs_reversal_long_term` | 72 | +0.14% | +0.14% | +0.72% → −1.18% | 0.15 | 0.158 | no |
-| `xs_52w_high` | 96 | −0.17% | −0.18% | −0.33% → +0.19% | 0.35 | 0.924 | no |
+| strategy | n in/out | gross | in → out | p | BH | sign held |
+|---|---|---|---|---|---|---|
+| `xs_reversal_1m` | 67 / 29 | +0.35% | +0.55% → **−0.09%** | 0.00025 | **yes** | no |
+| `xs_reversal_long_term` | 50 / 22 | +0.14% | +0.72% → **−1.18%** | 0.00025 | **yes** | no |
+| `xs_low_volatility` | 67 / 29 | +0.57% | +0.37% → +1.05% | 0.00325 | **yes** | **yes** |
+| `xs_momentum_12_1` | 67 / 29 | +0.24% | −0.06% → +0.91% | 0.662 | no | no |
+| `xs_momentum_6_1` | 67 / 29 | +0.20% | −0.11% → +0.91% | 0.790 | no | no |
+| `xs_52w_high` | 67 / 29 | −0.17% | −0.33% → +0.19% | 0.994 | no | no |
 
-`xs_reversal_1m` fails the out-of-sample sign gate: +0.55% in-sample becomes −0.09% out.
+Two of the three survivors reverse sign out of sample, and `xs_reversal_long_term`
+reverses violently: +0.72% a month in-sample becomes −1.18% out. That is the signature of
+a period-specific fit, and the holdout is what exposes it.
 
-`xs_low_volatility` is the only thing in nine findings to clear both the baseline and the
-correction with its sign intact. **It still is not an edge, for two separate reasons.**
+`xs_low_volatility` is the only test in nine findings to clear the baseline, clear the
+correction, and hold its sign — out of sample it is *stronger* than in. **It still is not
+an edge, for two separate reasons.**
 
-**It misses the sample gate by one period.** 96 monthly rebalances, split 70/30, gives 29
-out-of-sample — and the declared gate is n ≥ 30. That gate is not relaxed here, but it
+**It misses the sample gate by one period.** 96 monthly rebalances split 70/30 gives 29
+out-of-sample against a declared gate of n ≥ 30. The gate is not relaxed here, but it
 should be read as a flaw in the pre-registration rather than as evidence: a
-monthly-rebalanced strategy on eight years of data can *never* clear a 30-period holdout
-under a 70/30 split, because 96 × 0.30 = 28.8. The gate was written for trade counts and
-applied to rebalance periods without noticing.
+monthly-rebalanced strategy on eight years can *never* clear a 30-period holdout, because
+96 × 0.30 = 28.8. The gate was written for trade counts and applied to rebalance periods
+without noticing.
 
-**It is five months out of ninety-six.** This check was NOT pre-registered, and it is
-reported as post-hoc — but it cuts against the result, which is the safe direction for a
-post-hoc test to cut:
+**Its entire return is five months out of ninety-six.** This check was NOT
+pre-registered and is reported as post-hoc — but it cuts against the result, which is the
+safe direction for a post-hoc test to cut. It holds *within each half separately*, which
+is what makes it more than an artefact of one lucky period:
 
-| | |
-|---|---|
-| mean monthly return | **+0.57%** |
-| median monthly return | **−0.15%** |
-| positive months | 47 / 96 — worse than a coin flip |
-| mean excluding the 5 best months | **−0.44%** — the sign flips |
+| | n | mean | median | positive | excluding its 5 best months |
+|---|---|---|---|---|---|
+| in-sample | 67 | +0.37% | **−0.91%** | 29/67 | **−0.99%** |
+| out-of-sample | 29 | +1.05% | +1.55% | 18/29 | **−0.83%** |
+| all | 96 | +0.57% | **−0.15%** | 47/96 | **−0.44%** |
 
 The five months are 2020-11 (+26.1%), 2020-05 (+21.8%), 2025-04 (+20.3%), 2021-02
-(+13.8%) and 2023-01 (+13.3%). The largest is the week of the COVID vaccine
-announcement; the second is the March-2020 recovery. This is not a strategy with an
-edge, it is a position that pays off enormously during violent factor rotations and
-loses slowly the rest of the time. Five events is not a sample, and a p-value of 0.00025
-against a rank-shuffled null does not become one — the null correctly reports that the
-low-volatility ranking really did align with those rotations, which is true and is not
-the same as being tradable.
+(+13.8%) and 2023-01 (+13.3%) — the vaccine week, the March-2020 recovery, and three
+other violent factor rotations. In-sample the median month **loses 0.91%** and fewer than
+half are positive. This is not a strategy with an edge; it is a position that pays
+enormously during rotations and bleeds the rest of the time. Five events is not a sample,
+and a p-value of 0.003 against a rank-shuffled null does not make it one — the null
+correctly reports that the low-volatility ranking really did align with those rotations,
+which is true, and is not the same as being tradable.
+
+### A methodological note that changed several of these numbers
+
+The first version of this finding scored every p-value against the **full** sample while
+every gate read **in-sample** statistics. The significance test and the thing it gated
+were therefore computed on different samples, and the holdout leaked into the p-value.
+Fixing it moved results in both directions, which is the point — the leak was not biased
+toward a conclusion, it was measuring the wrong thing:
+
+| strategy | p before | p after | why |
+|---|---|---|---|
+| `xs_momentum_12_1` | 0.026 | **0.662** | in-sample gross is −0.06%; the full-sample figure was carried by the holdout |
+| `xs_momentum_6_1` | 0.048 | **0.790** | same |
+| `xs_reversal_long_term` | 0.158 | **0.00025** | in-sample +0.72% is far stronger than its full-sample +0.14% |
+| `xs_low_volatility` | 0.00025 | **0.00325** | no longer pinned at the Monte Carlo floor, so the value is now readable |
+
+Both momentum legs were **false positives** in the first version. The holdout boundary was
+also derived from trade density rather than from the calendar, so two detectors in the
+same table were being held out against different spans of history; it is now a fixed
+fraction of the declared window, 2024-03-07, identical for every detector.
 
 ### What this finding actually establishes
 
 Findings 1-8 could always be answered with "crypto is expensive to trade and these are
 equity strategies". That answer is now closed off. At 2.9 bps round trip, on a
 survivorship-free universe of the exact instruments these papers studied, with real
-opening bells and real sessions: **42 pre-registered tests, 2 survive the correction,
-and neither survives inspection.**
+opening bells and real sessions: **42 pre-registered tests, 3 survive the correction, and
+none survives the decision rule.**
 
-The one that comes closest is a well-documented factor whose entire measured return sits
-in five months of the sample.
+Two of the three reverse sign out of sample. The third is a well-documented factor whose
+median month is negative and whose entire measured return sits in five months out of
+ninety-six.
 
 ---
 

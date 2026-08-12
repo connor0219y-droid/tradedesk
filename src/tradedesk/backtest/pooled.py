@@ -195,25 +195,35 @@ def pool_null(parts: list[SymbolNull], draws: int) -> list[float]:
     return out
 
 
-def split_trades(
-    trades: list[Trade], *, in_sample_pct: float
-) -> tuple[list[Trade], list[Trade]]:
-    """Chronological 70/30 split on SIGNAL TIME, pooled across symbols.
+def calendar_boundary(start_ms: int, end_ms: int, *, in_sample_pct: float) -> int:
+    """The holdout boundary, as a fraction of CALENDAR TIME rather than of trades.
 
-    The boundary is a single instant applied to every symbol, not a per-symbol
-    percentile. A per-symbol split would put different calendar periods in the holdout
-    for different names, so the out-of-sample set would blend 2019 for one stock with
-    2025 for another -- and any regime effect would be smeared across both halves
-    instead of being held out.
+    THE BUG THIS REPLACES. The previous version took the signal time of the trade at the
+    70th percentile of the sorted trade list. That is one instant, so every symbol did
+    share a boundary -- but WHICH instant was decided by trade density. A detector that
+    fires often on three busy names and rarely on the rest let those three names drag the
+    cut, and the holdout then covered a different span of market history for that
+    detector than for its neighbour in the same family. Two detectors in one table were
+    being held out against different periods.
+
+    Deriving it from the calendar makes the holdout the same span of history for every
+    detector and every symbol, which is what "out of sample" is supposed to mean.
     """
-    if not trades:
-        return [], []
+    return start_ms + int((end_ms - start_ms) * in_sample_pct / 100.0)
+
+
+def split_trades(
+    trades: list[Trade], *, boundary_ms: int
+) -> tuple[list[Trade], list[Trade]]:
+    """Split on a fixed instant supplied by the caller.
+
+    Strictly before the boundary is in-sample; at or after is held out.
+    """
     ordered = sorted(trades, key=lambda t: t.signal_ms)
-    stamps = [t.signal_ms for t in ordered]
-    cut = stamps[min(len(stamps) - 1, int(len(stamps) * in_sample_pct / 100.0))]
-    in_s = [t for t in ordered if t.signal_ms < cut]
-    out_s = [t for t in ordered if t.signal_ms >= cut]
-    return in_s, out_s
+    return (
+        [t for t in ordered if t.signal_ms < boundary_ms],
+        [t for t in ordered if t.signal_ms >= boundary_ms],
+    )
 
 
 def _mean(vals: list[float]) -> float | None:
@@ -231,13 +241,13 @@ def build_report(
     bt: BacktestConfig,
     round_trip_bps: float,
     draws: int,
-    in_sample_pct: float,
+    boundary_ms: int,
     min_n: int,
     provisional_n: int,
     bootstrap_iterations: int,
 ) -> PooledReport:
     all_trades = [t for ts in trades_by_symbol.values() for t in ts]
-    in_t, out_t = split_trades(all_trades, in_sample_pct=in_sample_pct)
+    in_t, out_t = split_trades(all_trades, boundary_ms=boundary_ms)
 
     s_in = compute([t.r_net for t in in_t], bootstrap_iterations=bootstrap_iterations,
                    min_n=min_n, provisional_n=provisional_n)
@@ -249,11 +259,14 @@ def build_report(
 
     p = null_mean = low = high = None
     null = pool_null(null_parts, draws)
-    if null and g_in is not None and all_trades:
-        # The null is built from the SAME trades the strategy took, so it is compared
-        # against the pooled gross over the same set -- in-sample only, matching the
-        # gate that consumes it.
-        observed = _mean([t.r_gross for t in all_trades])
+    if null and g_in is not None and in_t:
+        # SCORED ON THE IN-SAMPLE TRADES, matching Part 1 and matching the gates that
+        # consume it. The previous version compared the null against the mean over ALL
+        # trades while every gate read in-sample statistics -- so the significance test
+        # and the thing it was gating were computed on different samples, and the
+        # holdout leaked into the p-value. `symbol_null` is now fed in-sample trades
+        # only, so the null's time-of-day histogram and trade count match too.
+        observed = g_in
         null.sort()
         at_least = sum(1 for v in null if v >= observed)
         p = (at_least + 1) / (len(null) + 1)
