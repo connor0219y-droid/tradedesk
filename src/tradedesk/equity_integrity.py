@@ -40,6 +40,8 @@ from datetime import date, timedelta
 
 import polars as pl
 
+from .calendars import MS_PER_DAY, CalendarError
+
 #: THE BUFFER IS ASYMMETRIC, and the asymmetry is load-bearing.
 #:
 #: BEFORE a name joins the index it still needs history, because a 12-month formation
@@ -179,6 +181,48 @@ def find_discontinuities(
         if delta > max_gap_days:
             out.append((prev, cur, delta))
     return out
+
+
+def drop_after_hours(
+    df: pl.DataFrame, calendar, *, timeframe_ms: int
+) -> tuple[pl.DataFrame, int]:
+    """Keep only bars inside the DECLARED session: premarket open through the close.
+
+    Alpaca's minute bars include the 16:00-20:00 post-market, which is a quarter of the
+    series -- 97,758 bars of AAPL's 407,635. PREREGISTRATION.md declares a session model
+    of premarket 04:00-09:30 plus RTH 09:30-16:00; after-hours is not part of it, so
+    those bars are removed before anything computes over them rather than being carried
+    along and filtered by every consumer that remembers to.
+
+    Bars at or coarser than a day are returned untouched: a daily bar spans the session
+    by definition, and there is no intraday window for it to sit outside of.
+    """
+    if df.is_empty() or timeframe_ms >= MS_PER_DAY:
+        return df, 0
+
+    lo_map: dict[object, int | None] = {}
+    hi_map: dict[object, int | None] = {}
+    for day in df["session_date"].unique().to_list():
+        try:
+            w = calendar.window(day)
+        except CalendarError:
+            lo_map[day] = hi_map[day] = None
+            continue
+        lo_map[day] = (
+            w.premarket_open_ms if w.premarket_open_ms is not None else w.open_ms
+        )
+        hi_map[day] = w.close_ms
+
+    marked = df.with_columns(
+        pl.col("session_date").replace_strict(lo_map, return_dtype=pl.Int64).alias("_lo"),
+        pl.col("session_date").replace_strict(hi_map, return_dtype=pl.Int64).alias("_hi"),
+    )
+    kept = marked.filter(
+        pl.col("_lo").is_not_null()
+        & (pl.col("bar_open_ms") >= pl.col("_lo"))
+        & (pl.col("bar_open_ms") < pl.col("_hi"))
+    ).drop("_lo", "_hi")
+    return kept, df.height - kept.height
 
 
 def clean(

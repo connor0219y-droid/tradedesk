@@ -191,3 +191,51 @@ def test_empty_input_is_handled():
     })
     df, report = clean(empty, "NONE")
     assert df.is_empty() and report.bars_in == 0 and report.bars_out == 0
+
+
+def test_after_hours_bars_are_dropped_before_levels_compute():
+    """The declared session is premarket + RTH. After-hours is not part of it.
+
+    A quarter of Alpaca's intraday series is post-market. Filtering it downstream rather
+    than up front would already have contaminated session VWAP, the noise band and every
+    contiguity run by the time anyone looked at a number.
+    """
+    from datetime import date as _date
+
+    from tradedesk.calendars import EquityCalendar
+    from tradedesk.equity_integrity import drop_after_hours
+
+    cal = EquityCalendar()
+    day = _date(2025, 6, 2)
+    w = cal.window(day)
+    starts = (list(range(w.premarket_open_ms, w.open_ms, 300_000))
+              + list(range(w.open_ms, w.close_ms, 300_000))
+              + list(range(w.close_ms, w.close_ms + 4 * 3600 * 1000, 300_000)))
+    df = pl.DataFrame({
+        "bar_open_ms": starts, "session_date": [day] * len(starts),
+        "open": [100.0] * len(starts), "high": [101.0] * len(starts),
+        "low": [99.0] * len(starts), "close": [100.5] * len(starts),
+        "volume": [10.0] * len(starts),
+    })
+    kept, dropped = drop_after_hours(df, cal, timeframe_ms=300_000)
+    assert dropped == 48                      # 16:00-20:00
+    assert kept.height == 66 + 78             # premarket + RTH
+    assert kept["bar_open_ms"].max() < w.close_ms
+
+
+def test_daily_bars_are_never_dropped_as_after_hours():
+    """A daily bar spans the session by definition; there is no window to sit outside."""
+    from datetime import date as _date
+
+    from tradedesk.calendars import EquityCalendar
+    from tradedesk.equity_integrity import drop_after_hours
+    from tradedesk.timeutil import et_day_bounds
+
+    days = [_date(2025, 6, 2), _date(2025, 6, 3)]
+    df = pl.DataFrame({
+        "bar_open_ms": [et_day_bounds(d)[0] for d in days], "session_date": days,
+        "open": [100.0] * 2, "high": [101.0] * 2, "low": [99.0] * 2,
+        "close": [100.5] * 2, "volume": [1e6] * 2,
+    })
+    kept, dropped = drop_after_hours(df, EquityCalendar(), timeframe_ms=86_400_000)
+    assert dropped == 0 and kept.height == 2

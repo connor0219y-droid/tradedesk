@@ -263,3 +263,77 @@ def test_instrument_class_is_inferred_from_the_symbol():
     assert for_instrument("equity").instrument_class == "equity"
     with pytest.raises(CalendarError, match="unknown instrument class"):
         for_instrument("futures")  # type: ignore[arg-type]
+
+
+# ------------------------------------------- bugs found by running the equity backfill
+
+
+def test_bars_after_the_close_are_not_regular_trading_hours():
+    """This test exists because the check used to be an unbounded `>=`.
+
+    Alpaca's minute bars run to 20:00, so on AAPL 97,758 after-hours bars -- a quarter
+    of the series -- were labelled `rth`. That fed 6,000-share prints into session VWAP,
+    let `ms_to_session_end` run to minus four hours, and put post-close bars inside
+    detectors keyed to the session end. `SessionWindow.segment_of` always got this
+    right; the session anchor disagreed with it, and the anchor was wrong.
+
+    Bounding only the RTH side moves the bug rather than fixing it: the post-close bars
+    then fall through into the premarket branch, which was also unbounded above. Both
+    sides are asserted here.
+    """
+    import polars as pl
+
+    from tradedesk.levels.session import add_session_anchors
+
+    cal = EquityCalendar()
+    day = date(2025, 6, 2)
+    w = cal.window(day)
+    pre = list(range(w.premarket_open_ms, w.open_ms, 300_000))
+    rth = list(range(w.open_ms, w.close_ms, 300_000))
+    post = list(range(w.close_ms, w.close_ms + 4 * 3600 * 1000, 300_000))
+    assert (len(pre), len(rth), len(post)) == (66, 78, 48)
+
+    starts = pre + rth + post
+    df = pl.DataFrame({
+        "bar_open_ms": starts, "session_date": [day] * len(starts),
+        "open": [100.0] * len(starts), "high": [101.0] * len(starts),
+        "low": [99.0] * len(starts), "close": [100.5] * len(starts),
+        "volume": [10.0] * len(starts),
+    })
+    out = add_session_anchors(df, calendar=cal, timeframe="5m")
+    seg = out["session_segment"].to_list()
+
+    assert seg[: len(pre)] == ["premarket"] * 66
+    assert seg[len(pre) : len(pre) + len(rth)] == ["rth"] * 78
+    assert seg[len(pre) + len(rth) :] == [None] * 48, "post-close bars leaked into a segment"
+    # And nothing reports negative time remaining in a session it is not in.
+    rth_rows = out.filter(out["session_segment"] == "rth")
+    assert rth_rows["ms_to_session_end"].min() == 0
+
+
+def test_a_daily_bar_is_the_whole_session_not_a_premarket_bar():
+    """Alpaca stamps a daily bar at 00:00 ET, 9.5 hours before the RTH open.
+
+    Run through the intraday arithmetic that makes every daily bar `premarket` with a
+    negative `ms_since_open`, and every level filtering on the RTH segment silently
+    discards the entire daily series.
+    """
+    import polars as pl
+
+    from tradedesk.levels.session import add_session_anchors
+
+    cal = EquityCalendar()
+    days = [date(2025, 6, 2), date(2025, 6, 3), date(2025, 6, 4)]
+    # 00:00 ET stamps, the convention the venue uses for daily bars.
+    from tradedesk.timeutil import et_day_bounds
+
+    df = pl.DataFrame({
+        "bar_open_ms": [et_day_bounds(d)[0] for d in days],
+        "session_date": days,
+        "open": [100.0] * 3, "high": [101.0] * 3, "low": [99.0] * 3,
+        "close": [100.5] * 3, "volume": [1e6] * 3,
+    })
+    out = add_session_anchors(df, calendar=cal, timeframe="1d")
+    assert out["session_segment"].to_list() == ["rth"] * 3
+    assert out["ms_since_open"].to_list() == [0, 0, 0]
+    assert out["ms_to_session_end"].to_list() == [0, 0, 0]

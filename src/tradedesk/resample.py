@@ -118,6 +118,20 @@ def read_bars_any(
     if timeframe not in DERIVED_FROM:
         return read_bars(con, symbol, timeframe, as_of=as_of, venue=venue)
 
+    # STORED BARS WIN OVER DERIVED ONES. Derivation exists because Coinbase's daily
+    # candles are UTC-anchored and would disagree with the ET session model -- there are
+    # no stored crypto 1d bars, so nothing changes there. Alpaca's daily bars ARE the
+    # 09:30-16:00 RTH session, which is the correct day definition for an equity, so
+    # deriving one from 1h bars would be strictly worse even if those bars existed.
+    #
+    # They do not. Before this check, asking for equity 1d silently returned an EMPTY
+    # frame: the reader looked for 1h equity bars, found none, and returned nothing --
+    # so all 26 daily detectors would have produced zero trades and reported as
+    # "insufficient sample" rather than as a missing data path.
+    stored = read_bars(con, symbol, timeframe, as_of=as_of, venue=venue)
+    if not stored.is_empty:
+        return stored
+
     source = DERIVED_FROM[timeframe]
     src = read_bars(con, symbol, source, as_of=as_of, venue=venue)
     if src.is_empty:

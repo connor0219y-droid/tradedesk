@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from ..calendars import CalendarError, MarketCalendar
+from ..calendars import MS_PER_DAY, CalendarError, MarketCalendar
 from ..timeutil import tf_ms as _tf_ms
 
 
@@ -73,6 +73,22 @@ def add_session_anchors(
         pre[day], early[day] = w.premarket_open_ms, w.early_close
 
     step = _tf_ms(timeframe)
+
+    # A BAR AT OR COARSER THAN A DAY IS THE WHOLE SESSION. Alpaca stamps a daily bar at
+    # 00:00 ET, which is 9.5 hours before the RTH open -- so the intraday arithmetic
+    # would classify every daily bar as PREMARKET and give it a negative
+    # `ms_since_open`. Every level that filters on the RTH segment would then discard
+    # the entire daily series, silently.
+    if step >= MS_PER_DAY:
+        return df.with_columns(
+            pl.col("bar_open_ms").alias("session_open_ms"),
+            (pl.col("bar_open_ms") + step).alias("session_close_ms"),
+            pl.lit(0, dtype=pl.Int64).alias("ms_since_open"),
+            pl.lit(0, dtype=pl.Int64).alias("ms_to_session_end"),
+            pl.lit("rth").alias("session_segment"),
+            pl.lit(False).alias("early_close"),
+        )
+
     df = df.with_columns(
         pl.col("session_date").replace_strict(opens, return_dtype=pl.Int64)
         .alias("session_open_ms"),
@@ -92,11 +108,24 @@ def add_session_anchors(
         .alias("ms_to_session_end"),
         pl.when(pl.col("session_open_ms").is_null())
         .then(None)
-        .when(pl.col("bar_open_ms") >= pl.col("session_open_ms"))
+        # AFTER THE CLOSE IS NOT RTH. This test used to be an unbounded `>=`, which
+        # labelled every after-hours bar as regular trading. Measured on AAPL that was
+        # 97,758 bars -- a quarter of the series -- carrying a "rth" label 4 hours past
+        # the close, contaminating session VWAP with 6,000-share prints and letting
+        # `ms_to_session_end` run to -4 hours. `calendars.SessionWindow.segment_of`
+        # always got this right; the two disagreed, and this was the wrong one.
+        .when(
+            (pl.col("bar_open_ms") >= pl.col("session_open_ms"))
+            & (pl.col("bar_open_ms") < pl.col("session_close_ms"))
+        )
         .then(pl.lit("rth"))
+        # Premarket is bounded on BOTH sides too. With only a lower bound, the
+        # after-hours bars excluded from `rth` above fall through to here and get
+        # labelled premarket instead -- moving the bug rather than fixing it.
         .when(
             pl.col("_premarket_open_ms").is_not_null()
             & (pl.col("bar_open_ms") >= pl.col("_premarket_open_ms"))
+            & (pl.col("bar_open_ms") < pl.col("session_open_ms"))
         )
         .then(pl.lit("premarket"))
         .otherwise(None)

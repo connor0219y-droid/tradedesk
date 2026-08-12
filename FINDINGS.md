@@ -509,6 +509,113 @@ than random entries with the same stop, target and holding rule.**
 
 ---
 
+## 9. Equities: costs stop mattering entirely, and still nothing survives
+
+Findings 1-8 all ended at the same place, and the same objection applied to all of them:
+crypto costs 248 bps a round trip, most of those papers studied equities, and the
+substitution was made because crypto was the data on hand. Finding 9 removes the
+objection. Same 18 published strategies, on US equities, plus the 6 cross-sectional
+strategies that three crypto symbols could not support.
+
+Pre-registered in [PREREGISTRATION.md](PREREGISTRATION.md) Part 2 and committed before
+the bars finished downloading: **42 tests — 36 time-series detectors and 6
+cross-sectional strategies — with ONE Benjamini-Hochberg correction across all of them.**
+
+### The setup
+
+| | |
+|---|---|
+| universe | point-in-time S&P 500 membership, 681 names ever, ~503 at any moment |
+| intraday | 50 names by median dollar volume over 2018-01..07, strictly before the window |
+| data | 1.2M daily bars, 13.3M 5m bars, 2018-08 to 2026-07, split-adjusted |
+| costs | commission zero; spread estimated per name (Corwin-Schultz), median 0.9 bps |
+| round trip | **2.9 bps**, against crypto's 248 |
+
+### Costs stop being the binding constraint
+
+This is the structural result, and it is what makes the rest of the finding worth
+anything:
+
+| study | median cost drag |
+|---|---|
+| crypto 5m, 1×ATR stop (finding 1) | **−17.7 R** |
+| crypto 4h/1d, daily-ATR stops (findings 7-8) | −0.36 to −0.72 R |
+| **equities (this finding)** | **−0.011 R** |
+
+The drag falls from 1,770% of a risk unit to **1.1%**. Eleven of 36 time-series tests
+now have positive net expectancy, which never happened once in findings 1-8. Every
+"but the fees" explanation for the earlier results is gone.
+
+### Time-series: 36 tests, 0 survivors
+
+**2 raw p < 0.05 where chance alone produces ~1.6.** Not one survives Benjamini-Hochberg,
+and both fail elsewhere anyway:
+
+| detector | tf | n in/out | gross in → out | p |
+|---|---|---|---|---|
+| `crypto_wk_mom_short` | 1d | 2687 / 1157 | −0.0156 → −0.0418 | 0.030 |
+| `momentum_pinball_short` | 5m | 704 / 302 | +0.0480 → **−0.0551** | 0.043 |
+
+The first is negative in both halves; the second flips sign out of sample. On the asset
+class these rules were written for, with real sessions and costs 85× lower, the answer
+is the same one crypto gave.
+
+### Cross-sectional: 2 survive the correction, 0 survive contact
+
+| strategy | n | gross/mo | net/mo | in → out | turnover | p | BH |
+|---|---|---|---|---|---|---|---|
+| `xs_low_volatility` | 96 | +0.57% | +0.57% | +0.37% → +1.05% | 0.08 | **0.00025** | **survives** |
+| `xs_reversal_1m` | 96 | +0.35% | +0.34% | +0.55% → −0.09% | 0.58 | **0.0020** | **survives** |
+| `xs_momentum_12_1` | 96 | +0.24% | +0.23% | −0.06% → +0.91% | 0.24 | 0.026 | no |
+| `xs_momentum_6_1` | 96 | +0.20% | +0.19% | −0.11% → +0.91% | 0.32 | 0.048 | no |
+| `xs_reversal_long_term` | 72 | +0.14% | +0.14% | +0.72% → −1.18% | 0.15 | 0.158 | no |
+| `xs_52w_high` | 96 | −0.17% | −0.18% | −0.33% → +0.19% | 0.35 | 0.924 | no |
+
+`xs_reversal_1m` fails the out-of-sample sign gate: +0.55% in-sample becomes −0.09% out.
+
+`xs_low_volatility` is the only thing in nine findings to clear both the baseline and the
+correction with its sign intact. **It still is not an edge, for two separate reasons.**
+
+**It misses the sample gate by one period.** 96 monthly rebalances, split 70/30, gives 29
+out-of-sample — and the declared gate is n ≥ 30. That gate is not relaxed here, but it
+should be read as a flaw in the pre-registration rather than as evidence: a
+monthly-rebalanced strategy on eight years of data can *never* clear a 30-period holdout
+under a 70/30 split, because 96 × 0.30 = 28.8. The gate was written for trade counts and
+applied to rebalance periods without noticing.
+
+**It is five months out of ninety-six.** This check was NOT pre-registered, and it is
+reported as post-hoc — but it cuts against the result, which is the safe direction for a
+post-hoc test to cut:
+
+| | |
+|---|---|
+| mean monthly return | **+0.57%** |
+| median monthly return | **−0.15%** |
+| positive months | 47 / 96 — worse than a coin flip |
+| mean excluding the 5 best months | **−0.44%** — the sign flips |
+
+The five months are 2020-11 (+26.1%), 2020-05 (+21.8%), 2025-04 (+20.3%), 2021-02
+(+13.8%) and 2023-01 (+13.3%). The largest is the week of the COVID vaccine
+announcement; the second is the March-2020 recovery. This is not a strategy with an
+edge, it is a position that pays off enormously during violent factor rotations and
+loses slowly the rest of the time. Five events is not a sample, and a p-value of 0.00025
+against a rank-shuffled null does not become one — the null correctly reports that the
+low-volatility ranking really did align with those rotations, which is true and is not
+the same as being tradable.
+
+### What this finding actually establishes
+
+Findings 1-8 could always be answered with "crypto is expensive to trade and these are
+equity strategies". That answer is now closed off. At 2.9 bps round trip, on a
+survivorship-free universe of the exact instruments these papers studied, with real
+opening bells and real sessions: **42 pre-registered tests, 2 survive the correction,
+and neither survives inspection.**
+
+The one that comes closest is a well-documented factor whose entire measured return sits
+in five months of the sample.
+
+---
+
 ## The conclusion, stated plainly
 
 **On BTC/USD, ETH/USD and SOL/USD, no pattern in this library is profitable under any tested

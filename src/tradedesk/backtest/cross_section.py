@@ -107,6 +107,21 @@ class CrossSectionalResult:
     null_high: float | None
     periods: list[tuple[date, float, float]] = field(default_factory=list)
     n_names_median: int = 0
+    #: Chronological 70/30 holdout, required by the decision rule's gates 1 and 5.
+    #: Without it a cross-sectional strategy cannot be asked the question every
+    #: time-series detector is asked: does the sign survive out of sample.
+    n_in: int = 0
+    n_out: int = 0
+    gross_in: float | None = None
+    gross_out: float | None = None
+    net_in: float | None = None
+    net_out: float | None = None
+
+    @property
+    def oos_sign_held(self) -> bool:
+        if self.gross_in is None or self.gross_out is None:
+            return False
+        return (self.gross_in >= 0) == (self.gross_out >= 0)
 
     @property
     def beats_random(self) -> bool:
@@ -221,8 +236,9 @@ def run_cross_section(
     *,
     membership: dict[date, set[str]] | None = None,
     costs: CostModel | None = None,
-    draws: int = 1000,
+    draws: int = 4000,
     seed: int = 0,
+    in_sample_pct: float = 70.0,
 ) -> CrossSectionalResult | None:
     """Backtest one cross-sectional strategy against random-rank portfolios."""
     if panel.is_empty():
@@ -284,6 +300,15 @@ def run_cross_section(
         low = null[int(0.025 * (len(null) - 1))]
         high = null[int(0.975 * (len(null) - 1))]
 
+    # Chronological holdout on the rebalance dates, the same 70/30 boundary the
+    # event-driven side uses. One boundary for the whole panel, not per strategy.
+    cut = int(len(per_period) * in_sample_pct / 100.0)
+    in_p, out_p = per_period[:cut], per_period[cut:]
+    g_in = sum(g for _, g, _ in in_p) / len(in_p) if in_p else None
+    g_out = sum(g for _, g, _ in out_p) / len(out_p) if out_p else None
+    n_in_m = sum(n for _, _, n in in_p) / len(in_p) if in_p else None
+    n_out_m = sum(n for _, _, n in out_p) / len(out_p) if out_p else None
+
     counts = sorted(name_counts)
     return CrossSectionalResult(
         spec=spec.name,
@@ -298,6 +323,8 @@ def run_cross_section(
         null_high=high,
         periods=per_period,
         n_names_median=counts[len(counts) // 2],
+        n_in=len(in_p), n_out=len(out_p),
+        gross_in=g_in, gross_out=g_out, net_in=n_in_m, net_out=n_out_m,
     )
 
 
