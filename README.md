@@ -16,34 +16,34 @@ pattern that cannot beat coin-flip entries is not a pattern, it is a habit.
 
 ## The headline finding
 
-After testing 26 hand-written detectors plus **18 strategies imported from published
-sources** (a pre-registered family of 36 detectors — see
-[PREREGISTRATION.md](PREREGISTRATION.md)), across 3 symbols, 4 years, and ~50
-configurations:
+After testing 26 hand-written detectors, **18 strategies imported from published
+sources**, and **6 cross-sectional strategies** — all pre-registered before running (see
+[PREREGISTRATION.md](PREREGISTRATION.md)) — across crypto and US equities, 3 + 681
+instruments, and 8 years:
 
-**No pattern in this library is profitable on BTC, ETH or SOL under any tested
-combination of timeframe, stop width, target multiple, order type, or obtainable fee
-tier — and neither are the published strategies.**
+**Nothing survives. Not on BTC, ETH or SOL at any tested combination of timeframe, stop
+width, target multiple, order type or fee tier; and not on the US equities most of these
+papers actually studied, where the round trip is 2.9 bps instead of 248.**
 
 That is the tool working, not failing. The details are in **[FINDINGS.md](FINDINGS.md)**;
 the four that matter most:
 
-1. **Costs dominate by one to two orders of magnitude.** At Coinbase's base tier the
-   round trip is 248 bps. A 1×ATR(5m) stop on BTC is 0.14% of price — so you pay roughly
-   **19× your risk** in fees per trade. No plausible edge survives that.
+1. **On crypto, costs dominate by one to two orders of magnitude.** At Coinbase's base
+   tier the round trip is 248 bps. A 1×ATR(5m) stop on BTC is 0.14% of price — so you pay
+   roughly **19× your risk** in fees per trade. No plausible edge survives that.
 2. **The edge and the cost never meet.** Widening the stop shrinks the cost drag, but it
    dilutes the edge *faster*: on 5m, gross edge falls 34× while drag falls 3.8×. The
    configurations cheap enough to trade are exactly the ones where the edge is gone.
-3. **Lower fees don't rescue it.** The obtainable floor for a US retail account is ~40 bps
-   (OKX US base, maker both sides), not the ~10 bps you might assume. Tested: still zero
-   survivors.
-4. **Nor does importing strategies from the literature.** 18 published strategies —
-   Turtle, time-series momentum, Connors' RSI(2), Crabel, *Street Smarts*, the recent
-   Zarattini ORB work — pre-registered as one family and run in a single pass produced
-   **1 raw p < 0.05 out of 105 scored tests, where chance alone produces ~5.3, and zero
-   survivors after correction**. Just as informative: **5 of the 18 cannot be tested at
-   all** on four years of data, because a signal that fires three times a year cannot
-   fill an out-of-sample window.
+3. **Importing strategies from the literature does not rescue it.** 18 published
+   strategies — Turtle, time-series momentum, Connors' RSI(2), Crabel, *Street Smarts*,
+   the recent Zarattini ORB work — run as one pre-registered family produced **1 raw
+   p < 0.05 out of 105 scored tests where chance produces ~5.3, and zero survivors**.
+4. **Neither does removing costs entirely.** On equities the drag falls from −17.7 R to
+   **−0.011 R** — from 1,770% of a risk unit to 1.1% — on a survivorship-free universe of
+   681 names with real opening bells. **42 pre-registered tests, 2 survive the
+   correction, and neither survives inspection.** The closest thing to an edge, a
+   low-volatility quintile sort, has a mean of +0.57%/month and a **median of −0.15%**:
+   remove its five best months out of ninety-six and the sign flips.
 
 A corollary worth internalising: **TradingView's paper broker is not charging you 248
 bps.** The gap between paper results and live results on these setups exceeds any edge
