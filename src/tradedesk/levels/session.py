@@ -20,7 +20,88 @@ from __future__ import annotations
 
 import polars as pl
 
+from ..calendars import CalendarError, MarketCalendar
 from ..timeutil import tf_ms as _tf_ms
+
+
+def add_session_anchors(
+    df: pl.DataFrame, *, calendar: MarketCalendar, timeframe: str
+) -> pl.DataFrame:
+    """Attach the session's real open and close, and each bar's place inside it.
+
+    THIS IS THE SEAM BETWEEN INSTRUMENT CLASSES. Before equities, every level measured
+    time as "milliseconds since ET midnight", which is correct for a 24-hour crypto day
+    and wrong for a 6.5-hour equity session in three separate ways: the anchor is seven
+    and a half hours early, the session is a quarter as long, and 17 days in the sample
+    end at 13:00. Levels now read `ms_since_open` and `ms_to_session_end` from here
+    instead of recomputing an anchor, so there is one definition to be right about.
+
+    `ms_since_open` is NEGATIVE in the premarket, deliberately. It is the honest answer
+    -- those bars are before the open -- and it makes the RTH test `ms_since_open >= 0`
+    rather than a separate lookup. An opening range that forgot the sign would treat
+    every premarket bar as inside the first thirty minutes.
+
+    For crypto this reduces exactly to the old ET-midnight arithmetic: the session opens
+    at 00:00, runs 23, 24 or 25 hours, and every bar is in the single segment. That
+    equality is what keeps findings 1-8 reproducible, and it is asserted in the tests.
+    """
+    if df.is_empty():
+        return df.with_columns(
+            pl.lit(None, dtype=pl.Int64).alias("session_open_ms"),
+            pl.lit(None, dtype=pl.Int64).alias("session_close_ms"),
+            pl.lit(None, dtype=pl.Int64).alias("ms_since_open"),
+            pl.lit(None, dtype=pl.Int64).alias("ms_to_session_end"),
+            pl.lit(None, dtype=pl.String).alias("session_segment"),
+            pl.lit(None, dtype=pl.Boolean).alias("early_close"),
+        )
+
+    opens: dict[object, int | None] = {}
+    closes: dict[object, int | None] = {}
+    pre: dict[object, int | None] = {}
+    early: dict[object, bool | None] = {}
+    for day in df["session_date"].unique().to_list():
+        try:
+            w = calendar.window(day)
+        except CalendarError:
+            # A bar on a day the market was shut. Nulled rather than guessed, so the
+            # quality layer sees it as unanchorable instead of silently placing it in a
+            # session that did not happen.
+            opens[day] = closes[day] = pre[day] = None
+            early[day] = None
+            continue
+        opens[day], closes[day] = w.open_ms, w.close_ms
+        pre[day], early[day] = w.premarket_open_ms, w.early_close
+
+    step = _tf_ms(timeframe)
+    df = df.with_columns(
+        pl.col("session_date").replace_strict(opens, return_dtype=pl.Int64)
+        .alias("session_open_ms"),
+        pl.col("session_date").replace_strict(closes, return_dtype=pl.Int64)
+        .alias("session_close_ms"),
+        pl.col("session_date").replace_strict(pre, return_dtype=pl.Int64)
+        .alias("_premarket_open_ms"),
+        pl.col("session_date").replace_strict(early, return_dtype=pl.Boolean)
+        .alias("early_close"),
+    )
+
+    return df.with_columns(
+        (pl.col("bar_open_ms") - pl.col("session_open_ms")).alias("ms_since_open"),
+        # Measured from this bar's CLOSE, so a rule phrased "at the start of the last
+        # half hour" can name the bar that must carry the signal.
+        (pl.col("session_close_ms") - (pl.col("bar_open_ms") + step))
+        .alias("ms_to_session_end"),
+        pl.when(pl.col("session_open_ms").is_null())
+        .then(None)
+        .when(pl.col("bar_open_ms") >= pl.col("session_open_ms"))
+        .then(pl.lit("rth"))
+        .when(
+            pl.col("_premarket_open_ms").is_not_null()
+            & (pl.col("bar_open_ms") >= pl.col("_premarket_open_ms"))
+        )
+        .then(pl.lit("premarket"))
+        .otherwise(None)
+        .alias("session_segment"),
+    ).drop("_premarket_open_ms")
 
 
 def add_session_columns(

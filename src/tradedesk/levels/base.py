@@ -115,10 +115,19 @@ class LevelContext:
     timeframe: str
     tf_ms: int
     config: object  # tradedesk.config.Config
+    #: The market calendar for this symbol's instrument class. A level that needs to
+    #: know how long a session is, or whether today is an early close, asks this rather
+    #: than assuming 24 hours -- which is what every level assumed when crypto was the
+    #: only instrument class.
+    calendar: object = None  # tradedesk.calendars.MarketCalendar
 
     @property
     def tf_minutes(self) -> float:
         return self.tf_ms / 60_000
+
+    @property
+    def is_equity(self) -> bool:
+        return getattr(self.calendar, "instrument_class", "crypto") == "equity"
 
 
 # ---------------------------------------------------------------- total functions

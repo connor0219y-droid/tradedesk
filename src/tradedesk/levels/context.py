@@ -36,11 +36,12 @@ def _rvol_tod(ctx: LevelContext) -> pl.DataFrame:
     is not a fair baseline. Fewer than 20 qualifying observations yields null rather
     than a thin-sample ratio.
     """
-    from .opening_range import add_et_midnight
-
-    df = add_et_midnight(ctx.df)
-    df = df.with_columns(
-        (pl.col("bar_open_ms") - pl.col("et_midnight_ms")).alias("tod_ms"),
+    # Time of day is measured from the SESSION OPEN, not from ET midnight. On equities
+    # those differ by seven and a half hours, and the baseline has to compare 10:00
+    # against prior days' 10:00 -- an anchor at midnight would compare the first hour of
+    # trading against the middle of the previous session.
+    df = ctx.df.with_columns(
+        pl.col("ms_since_open").alias("tod_ms"),
         # Broken sessions contribute no baseline.
         pl.when(pl.col("session_broken"))
         .then(None)
@@ -63,4 +64,4 @@ def _rvol_tod(ctx: LevelContext) -> pl.DataFrame:
 
     return df.with_columns(
         safe_div(pl.col("volume"), pl.col("_median_tod"), when_zero=None).alias("rvol_tod")
-    ).drop("et_midnight_ms", "_vol_ok", "_median_tod")
+    ).drop("_vol_ok", "_median_tod")

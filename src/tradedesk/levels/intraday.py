@@ -1,14 +1,20 @@
 """Session-anchored levels for the imported intraday strategies.
 
-Everything here is anchored to 00:00 ET, the same synthetic session boundary the rest of
-the project uses for crypto. That anchor is a modelling choice, not a market fact: SPY
-has an opening bell and BTC does not, so "the first half-hour return" is the first half
-hour of an ET calendar day rather than of a trading session that actually starts. Where
-a source's rule depends on there being a real open -- Zarattini's overnight-gap
-adjustment, which shifts the noise band by the distance between yesterday's close and
-today's open -- the term is DROPPED rather than approximated, because on a 24/7 venue
-the gap it corrects for does not exist. That is noted per level below and in
-PREREGISTRATION.md; it makes these tests of the rule's shape on crypto, not replications.
+Everything here is anchored to the SESSION OPEN, which the calendar defines per
+instrument class: 00:00 ET for crypto, 09:30 ET for equities. That distinction is the
+whole reason these levels were worth generalising rather than duplicating.
+
+ON CRYPTO THESE ARE APPROXIMATIONS OF THEIR SOURCES; ON EQUITIES THEY ARE THE SOURCES.
+Every strategy reading these levels was written about a market with an opening bell.
+"The first half-hour return" means the first half hour after a real open, and on a 24/7
+venue there is no such instant -- the ET-midnight anchor is a stand-in, and findings 1-8
+were measured against it. On equities the anchor is the actual open, so the same
+detector is now testing the published rule rather than an analogue of it.
+
+One term is still dropped on crypto only: Zarattini's overnight-gap adjustment, which
+shifts the noise band by the distance from yesterday's close to today's open. Crypto has
+no overnight gap, so there is nothing to adjust for. Equities do, and the adjustment
+applies -- see `_noise_band`.
 
 THE LOOKAHEAD TRAP, again. A "first half-hour return" attached to every bar of the
 session, including the bars inside that first half hour, is lookahead: at 00:05 you do
@@ -21,7 +27,6 @@ from __future__ import annotations
 import polars as pl
 
 from .base import LevelContext, level, safe_div
-from .opening_range import add_et_midnight
 
 #: Gao, Han, Li & Zhou measure the first and last half-hour of the session.
 HALF_HOUR_MS = 1_800_000
@@ -32,47 +37,46 @@ STRETCH_SESSIONS = 10
 #: Zarattini's noise band averages the move-from-open over the last 14 sessions.
 NOISE_SESSIONS = 14
 
-MS_PER_DAY = 86_400_000
 
 
 def _with_tod(df: pl.DataFrame) -> pl.DataFrame:
-    """Milliseconds since 00:00 ET, recomputed here rather than assumed.
+    """Milliseconds since the SESSION OPEN, from the session anchor.
 
-    `context.py` does the same. Depending on another level's aux column would make the
-    ordering load-bearing and silent when it broke.
+    This used to recompute an ET-midnight offset locally. It cannot any more: on
+    equities the session opens at 09:30, and a level that re-derived its own anchor
+    would disagree with `opening_range` and `rvol_tod` about what time it is.
     """
-    df = add_et_midnight(df)
-    return df.with_columns(
-        (pl.col("bar_open_ms") - pl.col("et_midnight_ms")).alias("_tod")
-    ).drop("et_midnight_ms")
+    return df.with_columns(pl.col("ms_since_open").alias("_tod"))
 
 
 @level(
     name="session_anchor",
     kind="session",
     depth=1,
-    outputs=("session_open", "ms_to_session_end", "ret_first30m", "first_hour_high",
-             "first_hour_low"),
+    outputs=("session_open", "ret_first30m", "first_hour_high", "first_hour_low"),
 )
 def _session_anchor(ctx: LevelContext) -> pl.DataFrame:
-    """The session's opening price, its remaining time, and its first-window summaries.
+    """The session's opening price and its first-window summaries.
 
-    `ms_to_session_end` counts from the END of this bar, which is what a rule phrased as
-    "at the beginning of the last half hour" needs: the engine enters at the next bar's
-    open, so the bar that must carry the signal is the one whose close leaves exactly
-    thirty minutes in the session.
+    `ms_to_session_end` used to be computed here as `one day minus the time of day`.
+    It now comes from the session anchor, because a day is exactly the wrong unit for
+    an equity session: 6.5 hours normally, 3.5 on an early close.
 
-    `session_open` is the open of the session's first PRESENT bar. If a session's first
-    bars are absent it is therefore not the 00:00 price -- but a level that invented the
-    00:00 price would be worse, and `session_broken` already masks the sessions where
-    this matters.
+    `session_open` is the open of the session's first present RTH bar. If a session's
+    opening bars are absent it is therefore not the 09:30 price -- but a level that
+    invented the 09:30 price would be worse, and `session_broken` already masks the
+    sessions where that matters.
     """
     df = _with_tod(ctx.df)
     tod = pl.col("_tod")
 
+    # The session's first RTH bar, not its first bar: on equities the frame's first bar
+    # of the day is a 04:00 premarket print, and anchoring Crabel's stretch or
+    # Lundstrom's threshold to it would measure the move from a premarket price that
+    # most of the market never traded at.
+    rth = pl.col("session_segment") == "rth"
     df = df.with_columns(
-        pl.col("open").first().over("session_date").alias("session_open"),
-        (MS_PER_DAY - (tod + ctx.tf_ms)).alias("ms_to_session_end"),
+        pl.col("open").filter(rth).first().over("session_date").alias("session_open"),
     )
 
     # A thirty-minute window is not representable on a four-hour bar. Computed anyway,

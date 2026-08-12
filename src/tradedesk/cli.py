@@ -274,6 +274,46 @@ def levels(
     console.print(table)
 
 
+@app.command("alpaca-probe")
+def alpaca_probe(
+    symbol: str = typer.Option("AAPL", "--symbol", help="any liquid ticker"),
+) -> None:
+    """Ask Alpaca what this account can actually pull, before backfilling anything.
+
+    Alpaca's own documentation is ambiguous about whether historical SIP bars are
+    available without a subscription when the window is old enough, and the answer
+    decides whether the intraday half of the equity study means anything: a 5-minute bar
+    built from IEX alone is about 2.5% of the tape. This asks rather than assumes.
+    """
+    from .venues.alpaca import AlpacaAuthError, from_env
+
+    try:
+        venue = from_env()
+        cap = venue.probe(symbol)
+    except AlpacaAuthError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    table = Table(box=None, header_style="bold", pad_edge=False)
+    table.add_column("question")
+    table.add_column("answer")
+    ok = lambda b: "[green]yes[/green]" if b else "[red]no[/red]"  # noqa: E731
+    table.add_row("SIP entitled (100% of volume)", ok(cap.sip_available))
+    table.add_row("IEX entitled (~2.5% of volume)", ok(cap.iex_available))
+    table.add_row("feed that will be used", f"[bold]{cap.feed}[/bold]")
+    table.add_row("earliest bar available", cap.earliest_bar or "[dim]unknown[/dim]")
+    console.print(table)
+    for note in cap.notes:
+        console.print(f"[dim]{note}[/dim]")
+
+    if not cap.sip_available:
+        console.print(
+            "\n[yellow]Without SIP, 5-minute bars are one exchange's prints, not the "
+            "market's.[/yellow] Daily bars remain usable; intraday results would not be "
+            "representative and should not be reported as if they were."
+        )
+
+
 @app.command()
 def validate(
     symbol: str = typer.Option(..., "--symbol", help='e.g. "BTC/USD"'),

@@ -18,13 +18,20 @@ from tradedesk.config import load_config
 from tradedesk.frames import BarFrame
 from tradedesk.levels import compute_levels
 from tradedesk.levels.profile import value_area
+from tradedesk.timeutil import et_day_bounds
 
 STEP = 60_000
-BASE = 1_700_000_000_000 // 86_400_000 * 86_400_000
+# ET MIDNIGHT of the session date, not UTC midnight. A fixture whose bars sit
+# outside the ET window its own `session_date` names is internally inconsistent:
+# `ms_since_open` goes negative, the opening-range window never closes, and
+# `or5_high` silently becomes a running max over the whole frame. Real data cannot
+# hit this -- ingest derives `session_date` FROM the bar time -- but the fixture
+# could, and did.
+BASE = et_day_bounds(date(2025, 6, 1))[0]
 
 
 def _frame(bars, sess=date(2025, 6, 1), start=None):
-    start = BASE if start is None else start
+    start = et_day_bounds(sess)[0] if start is None else start
     rows = [
         {
             "venue": "coinbase", "symbol": "X/USD", "timeframe": "1m",

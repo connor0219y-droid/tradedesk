@@ -29,8 +29,11 @@ from tradedesk.levels.base import (
     safe_sqrt,
 )
 
+from tradedesk.timeutil import et_day_bounds
+
 STEP = 60_000
-BASE = 1_700_000_000_000 // 86_400_000 * 86_400_000  # aligned to a day boundary
+# ET midnight of the first session date -- see the note in test_levels_known_answer.
+BASE = et_day_bounds(date(2025, 6, 1))[0]
 
 
 def _bar(ms, sess, o, h, l, c, v):

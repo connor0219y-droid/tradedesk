@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 import polars as pl
 
+from ..calendars import classify, for_instrument
 from ..config import Config
 from ..frames import BarFrame
 from ..timeutil import tf_ms as _tf_ms
@@ -38,7 +39,7 @@ from . import (  # noqa: F401
 )
 from .base import REGISTRY, LevelContext, LevelSpec, assert_total, resolve_order
 from .scale import atr_percentile_frame, daily_atr_frame, distance_in_atr
-from .session import add_session_columns, session_valid
+from .session import add_session_anchors, add_session_columns, session_valid
 
 #: Levels computed by default, in declaration order (dependencies resolved separately).
 DEFAULT_LEVELS = [
@@ -98,6 +99,8 @@ AUX_COLUMNS = frozenset(
         "gap", "run_id", "session_broken", "bar_idx_in_session", "session_start_ms",
         "hole_ms", "valid_prior_sessions", "ms_since_open", "tod_ms",
         "clean_tr_in_run", "typical_price", "bar_range", "atr_daily", "atr_pct_60d",
+        "session_open_ms", "session_close_ms", "ms_to_session_end",
+        "session_segment", "early_close",
     }
 )
 
@@ -151,6 +154,11 @@ def compute_levels(
     df = add_session_columns(
         df, timeframe=bf.timeframe, outage_minutes=cfg.quality.outage_minutes
     )
+    # The session's real open and close, from the calendar for this instrument class.
+    # Must run before any level, because levels read `ms_since_open` from here instead
+    # of recomputing an ET-midnight anchor.
+    calendar = for_instrument(classify(bf.symbol))
+    df = add_session_anchors(df, calendar=calendar, timeframe=bf.timeframe)
 
     # Count of VALID sessions strictly before each bar's session. Strictly prior, so a
     # cross-session level can never see its own session.
@@ -179,7 +187,7 @@ def compute_levels(
 
     ctx = LevelContext(
         df=df, symbol=bf.symbol, timeframe=bf.timeframe,
-        tf_ms=_tf_ms(bf.timeframe), config=cfg,
+        tf_ms=_tf_ms(bf.timeframe), config=cfg, calendar=calendar,
     )
 
     for spec in specs:

@@ -53,10 +53,10 @@ def add_et_midnight(df: pl.DataFrame) -> pl.DataFrame:
     ),
 )
 def _opening_range(ctx: LevelContext) -> pl.DataFrame:
-    df = add_et_midnight(ctx.df)
-    df = df.with_columns(
-        (pl.col("bar_open_ms") - pl.col("et_midnight_ms")).alias("ms_since_open")
-    )
+    # `ms_since_open` now comes from the session anchor, which knows where the session
+    # actually starts: 00:00 ET for crypto, 09:30 for equities. Recomputing it here
+    # would give an equity opening range anchored seven and a half hours early.
+    df = ctx.df
 
     exprs: list[pl.Expr] = []
     for minutes in OR_MINUTES:
@@ -72,7 +72,10 @@ def _opening_range(ctx: LevelContext) -> pl.DataFrame:
             ]
             continue
 
-        inside = pl.col("ms_since_open") < window_ms
+        # `>= 0` is what excludes the premarket. Without it every premarket bar has a
+        # NEGATIVE ms_since_open, satisfies `< window_ms`, and lands inside the opening
+        # range -- so an equity 30-minute range would silently be the 04:00-10:00 range.
+        inside = (pl.col("ms_since_open") >= 0) & (pl.col("ms_since_open") < window_ms)
         exprs += [
             pl.when(inside)
             .then(pl.col("high"))
@@ -103,4 +106,4 @@ def _opening_range(ctx: LevelContext) -> pl.DataFrame:
                 f"or{minutes}_pos"
             ),
         ]
-    return df.with_columns(derived).drop("et_midnight_ms")
+    return df.with_columns(derived)

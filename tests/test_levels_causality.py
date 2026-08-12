@@ -17,6 +17,7 @@ from tradedesk.config import load_config
 from tradedesk.frames import BarFrame
 from tradedesk.levels import compute_levels
 from tradedesk.levels.base import REGISTRY, LevelError, level
+from tradedesk.timeutil import et_day_bounds
 
 STEP = 60_000
 BASE = 1_700_000_000_000 // 86_400_000 * 86_400_000
@@ -27,7 +28,7 @@ def _series(n_sessions=3, bars=200, hole_at=None, hole_bars=0):
     rows = []
     for s in range(n_sessions):
         sess = date(2025, 6, 1 + s)
-        t0 = BASE + s * 86_400_000
+        t0 = et_day_bounds(sess)[0]
         i = 0
         placed = 0
         while placed < bars:
