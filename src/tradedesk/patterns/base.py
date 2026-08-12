@@ -28,6 +28,46 @@ class PatternError(Exception):
 
 
 @dataclass(frozen=True)
+class RiskSpec:
+    """The stop and target a SOURCE specified, carried by the detector itself.
+
+    An imported strategy is an entry condition AND its exit rules. Validating it under
+    whatever stop the command line happened to pass tests a different strategy that
+    shares its entry, so a detector that came from a published rule pins its own risk
+    parameters here and the validator uses them instead of the run-wide defaults.
+
+    This is also a defence against the garden of forking paths. A strategy whose stop
+    lives in its spec has one configuration; a strategy whose stop is a CLI flag has as
+    many as you care to try, and the temptation is to quote the best.
+    """
+
+    stop_atr: float
+    target_r: float
+    #: The holding cap in DAYS, not bars. Every source states its cap in calendar terms
+    #: -- "hold one month", "exit within two to six bars" on a daily chart, "day trade
+    #: only" -- and a bar count would silently mean six days at 1d and one day at 4h.
+    #: `bars_for` converts it against the timeframe actually being traded.
+    max_hold_days: float
+    atr_column: str = "atr_daily"
+    hold_across_sessions: bool = True
+    min_bars_between_entries: int = 0
+
+    def __post_init__(self) -> None:
+        if self.stop_atr <= 0:
+            raise PatternError(f"stop_atr must be > 0, got {self.stop_atr}")
+        if self.target_r <= 0:
+            raise PatternError(f"target_r must be > 0, got {self.target_r}")
+        if self.max_hold_days <= 0:
+            raise PatternError(f"max_hold_days must be > 0, got {self.max_hold_days}")
+        if self.atr_column not in ("atr_intraday", "atr_daily"):
+            raise PatternError(f"unknown atr_column {self.atr_column!r}")
+
+    def bars_for(self, tf_ms: int) -> int:
+        """The holding cap in bars on a given timeframe, at least one bar."""
+        return max(1, round(self.max_hold_days * 86_400_000 / tf_ms))
+
+
+@dataclass(frozen=True)
 class PatternSpec:
     name: str
     depth: int
@@ -35,10 +75,32 @@ class PatternSpec:
     fn: Callable[[], pl.Expr]
     requires: tuple[str, ...] = ()
     doc: str = ""
+    #: Set only for detectors imported from a published source. None means "use the
+    #: run-wide stop and target", which is what every hand-written pattern does.
+    risk: RiskSpec | None = None
+    #: Pre-registered family this detector belongs to, e.g. "published". The multiple
+    #: testing correction is applied across a family, so the family has to be a
+    #: declared property of the detector rather than a filter invented at report time.
+    family: str = "library"
+    #: Citation for an imported strategy. Empty for hand-written patterns.
+    source: str = ""
+    #: Timeframes this detector may be evaluated on. Empty means "any", which is what
+    #: every hand-written pattern declares.
+    #:
+    #: This exists to make a pre-registration executable. Declaring in a document that a
+    #: strategy is evaluated at one horizon, and then running it at three because its
+    #: columns happen to be present, is how a family of 36 tests quietly becomes 100 --
+    #: and the correction that was sized for 36 stops controlling anything. Enforcing it
+    #: here means the run cannot drift from the document without the declaration
+    #: changing too.
+    timeframes: tuple[str, ...] = ()
 
     @property
     def is_long(self) -> bool:
         return self.direction == "long"
+
+    def runs_on(self, timeframe: str) -> bool:
+        return not self.timeframes or timeframe in self.timeframes
 
 
 REGISTRY: dict[str, PatternSpec] = {}
@@ -50,6 +112,10 @@ def pattern(
     depth: int,
     direction: Direction,
     requires: tuple[str, ...] = (),
+    risk: RiskSpec | None = None,
+    family: str = "library",
+    source: str = "",
+    timeframes: tuple[str, ...] = (),
 ):
     """Register a detector, forcing it to declare its lookback depth and direction.
 
@@ -59,6 +125,10 @@ def pattern(
         raise PatternError(f"{name}: depth must be >= 1")
     if direction not in ("long", "short"):
         raise PatternError(f"{name}: direction must be 'long' or 'short'")
+    # An imported strategy without its source is untraceable, and the whole point of
+    # importing it is that someone else specified it. Refuse at import time.
+    if risk is not None and not source:
+        raise PatternError(f"{name}: a detector with a RiskSpec must cite its source")
 
     def decorator(fn: Callable[[], pl.Expr]):
         if name in REGISTRY:
@@ -66,6 +136,8 @@ def pattern(
         REGISTRY[name] = PatternSpec(
             name=name, depth=depth, direction=direction, fn=fn,
             requires=tuple(requires), doc=(fn.__doc__ or "").strip(),
+            risk=risk, family=family, source=source,
+            timeframes=tuple(timeframes),
         )
         return fn
 
@@ -109,7 +181,16 @@ def detect(df: pl.DataFrame, name: str) -> pl.Series:
     return ok.rename(name)
 
 
-def registered(direction: Direction | None = None) -> list[str]:
+def registered(
+    direction: Direction | None = None, *, family: str | None = None
+) -> list[str]:
     return sorted(
-        n for n, s in REGISTRY.items() if direction is None or s.direction == direction
+        n
+        for n, s in REGISTRY.items()
+        if (direction is None or s.direction == direction)
+        and (family is None or s.family == family)
     )
+
+
+def families() -> list[str]:
+    return sorted({s.family for s in REGISTRY.values()})

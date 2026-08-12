@@ -164,6 +164,10 @@ def harness_is_causal(bf: BarFrame, cfg, cutoff_ms: int, columns: list[str]) -> 
 CAUSAL_COLUMNS = [
     "close_pos_in_range", "true_range", "atr_intraday", "vwap", "vwap_sigma",
     "or5_high", "or15_high", "or30_high", "poc", "prior_day_close",
+    # The indicators added for the imported published strategies. Same harness, because
+    # a new level is exactly as capable of reading the future as an old one.
+    "dc3_low", "dc20_high", "sma_5d", "bb_upper", "bb_width", "nr7", "inside_bar",
+    "rsi_2", "lbr_rsi3", "session_open", "ms_to_session_end", "prior_day_open",
 ]
 
 
@@ -171,6 +175,44 @@ def test_all_levels_are_causal(cfg):
     bf = _series(n_sessions=3, bars=200)
     cutoff = int(bf.df["bar_open_ms"][350])
     assert harness_is_causal(bf, cfg, cutoff, CAUSAL_COLUMNS)
+
+
+def test_first_window_levels_are_causal_inside_their_own_window(cfg):
+    """The same trap as the opening range, in the levels the intraday imports read.
+
+    `ret_first30m` and `first_hour_high` summarise a window that is still running for
+    the bars inside it. The obvious implementation computes the finished value and
+    attaches it to every bar of the session, which at 00:05 reports a number that will
+    not be knowable for another twenty-five minutes -- and which looks perfectly
+    reasonable in the output.
+
+    Truncating INSIDE the window is the only way to catch it: by the end of the session
+    the running value and the final value agree, so a whole-series comparison passes.
+    """
+    bf = _series(n_sessions=2, bars=200)
+    inside_first_half_hour = int(bf.df["bar_open_ms"][10])   # 1m bars, so 00:10
+    assert harness_is_causal(
+        bf, cfg, inside_first_half_hour,
+        ["ret_first30m", "first_hour_high", "first_hour_low", "session_open"],
+    )
+
+
+def test_noise_band_and_stretch_are_causal(cfg):
+    """Both average over prior sessions, and both would be trivial to make circular.
+
+    The noise band decides whether today's move is unusual; if today's own move sat in
+    the average it is compared against, the band would widen exactly when it should
+    fire. The `shift(1)` in each is what prevents that, and this asserts it survives.
+
+    Fifteen sessions so that the 14-session noise average and the 10-session stretch
+    both have enough history to produce values rather than passing vacuously on nulls.
+    """
+    bf = _series(n_sessions=15, bars=60)
+    cutoff = int(bf.df["bar_open_ms"][14 * 60 + 30])
+    full = compute_levels(bf, cfg).to_polars()
+    assert full["stretch"].drop_nulls().len() > 0, "stretch never produced a value"
+    assert full["noise_upper"].drop_nulls().len() > 0, "noise band never produced a value"
+    assert harness_is_causal(bf, cfg, cutoff, ["noise_upper", "noise_lower", "stretch"])
 
 
 def test_opening_range_is_causal_inside_its_own_window(cfg):

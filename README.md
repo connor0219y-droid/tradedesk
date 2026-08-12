@@ -16,14 +16,17 @@ pattern that cannot beat coin-flip entries is not a pattern, it is a habit.
 
 ## The headline finding
 
-After testing 20 detectors across 3 symbols, 4 years, and ~50 configurations:
+After testing 26 hand-written detectors plus **18 strategies imported from published
+sources** (a pre-registered family of 36 detectors — see
+[PREREGISTRATION.md](PREREGISTRATION.md)), across 3 symbols, 4 years, and ~50
+configurations:
 
 **No pattern in this library is profitable on BTC, ETH or SOL under any tested
 combination of timeframe, stop width, target multiple, order type, or obtainable fee
-tier.**
+tier — and neither are the published strategies.**
 
 That is the tool working, not failing. The details are in **[FINDINGS.md](FINDINGS.md)**;
-the three that matter most:
+the four that matter most:
 
 1. **Costs dominate by one to two orders of magnitude.** At Coinbase's base tier the
    round trip is 248 bps. A 1×ATR(5m) stop on BTC is 0.14% of price — so you pay roughly
@@ -34,6 +37,13 @@ the three that matter most:
 3. **Lower fees don't rescue it.** The obtainable floor for a US retail account is ~40 bps
    (OKX US base, maker both sides), not the ~10 bps you might assume. Tested: still zero
    survivors.
+4. **Nor does importing strategies from the literature.** 18 published strategies —
+   Turtle, time-series momentum, Connors' RSI(2), Crabel, *Street Smarts*, the recent
+   Zarattini ORB work — pre-registered as one family and run in a single pass produced
+   **1 raw p < 0.05 out of 105 scored tests, where chance alone produces ~5.3, and zero
+   survivors after correction**. Just as informative: **5 of the 18 cannot be tested at
+   all** on four years of data, because a signal that fires three times a year cannot
+   fill an out-of-sample window.
 
 A corollary worth internalising: **TradingView's paper broker is not charging you 248
 bps.** The gap between paper results and live results on these setups exceeds any edge

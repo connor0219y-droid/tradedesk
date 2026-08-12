@@ -391,6 +391,124 @@ new place.
 
 ---
 
+## 8. Eighteen published strategies, pre-registered: nine testable, none survive
+
+Findings 1–7 test setups this project wrote down itself. The obvious objection is that
+the library is the problem — that these are folk patterns, and real strategies live in
+the literature. Finding 8 answers that directly: 18 strategies taken from published
+sources, each with an entry, a stop and a target specified by its author rather than by
+me, registered as 36 detectors and run in a single pass.
+
+**The family was fixed in writing before anything was run** — see
+[PREREGISTRATION.md](PREREGISTRATION.md), which names the strategies, the horizon each
+is evaluated at, the decision rule, and the Monte Carlo resolution. That document is what
+makes the Benjamini-Hochberg correction below mean anything, and it carries its own
+amendment log: two changes were made after writing it and before running it (Momentum
+Pinball moved to 5m because a one-hour opening range does not exist inside a 4h bar, and
+Turtle System 1's "skip the breakout after a winner" filter turned out to be
+inexpressible as a per-bar detector). Both are recorded in place rather than quietly
+applied.
+
+### What was tested
+
+| Group | Strategies | Sources |
+|---|---|---|
+| Momentum / trend | 7 | Moskowitz-Ooi-Pedersen (2012); Turtle Systems 1 & 2; George-Hwang (2004); Liu-Tsyvinski (2021); Gao-Han-Li-Zhou (2018); Zarattini-Aziz-Barbon (2024) |
+| Mean reversion | 6 | Connors-Alvarez RSI(2); Raschke-Connors *Street Smarts* — Turtle Soup, Turtle Soup Plus One, 80-20's, Momentum Pinball; Bollinger band reversion |
+| Volatility | 5 | Crabel NR7, ID/NR4, stretch-ORB; Lundström (2013) ρ-ORB; Bollinger squeeze |
+
+Session-anchored strategies ran on 5m, swing strategies on 4h and 1d — each at one
+horizon only, enforced by a declaration on the detector rather than by my remembering.
+Three instruments × three timeframes, 4,000 Monte Carlo draws per test.
+
+### The headline
+
+**186 tested cells, 105 of them scored against a random baseline. One raw p < 0.05, where
+chance alone produces ~5.3. Zero survive Benjamini-Hochberg on any series. Two cells
+have positive net expectancy, and both fail on other gates.**
+
+Getting *fewer* raw hits than chance is itself the result. A family of 105 tests with no
+edge anywhere should throw about five p < 0.05 results; this one threw one.
+
+### Only half the family could be tested at all
+
+The more useful finding, and the one that constrains what any of this can conclude:
+
+| Outcome | Strategies | Which |
+|---|---|---|
+| Testable (in- and out-of-sample) | **9 / 18** | Connors RSI(2), Crabel ID/NR4, Crabel NR7, Crabel stretch, crypto weekly momentum, 80-20's, Gao intraday, Lundström ORB, Momentum Pinball, noise breakout |
+| In-sample only (no cell reaches n≥30 out of sample) | 4 / 18 | Bollinger reversion, Turtle System 1, Turtle Soup |
+| Insufficient sample anywhere | **5 / 18** | 12-month TSMOM, 52-week high, Turtle System 2, Turtle Soup Plus One, Bollinger squeeze |
+
+The five that cannot be tested are exactly the ones with the longest lookbacks or the
+rarest triggers. A 12-month return crosses zero 1–5 times in four years on BTC; the
+Bollinger squeeze plus a band break fires 2–5 times. **Four years of history cannot
+evaluate a strategy whose signal is annual**, and no amount of care in the harness
+changes that. Finding 7 hit the same wall from the other side.
+
+### The one cell that went positive, and why it is not an edge
+
+`crypto_wk_mom_long` — Liu & Tsyvinski's weekly time-series momentum — on SOL/USD:
+
+| | 4h | 1d |
+|---|---|---|
+| net expectancy | **+0.050R** | **+0.084R** |
+| in-sample n | 68 (provisional, < 100) | 60 (provisional) |
+| out-of-sample n | 33 | 26 — **below the n≥30 line** |
+| gross in → out | +0.229R → +0.026R (decays 9×) | +0.272R → **−0.013R, sign flips** |
+| 95% CI on net | [−0.167, +0.276] | [−0.168, +0.352] |
+| p vs its own null | 0.104 | 0.070 |
+| survives BH | no | no |
+
+And the exit mix says what the trade actually was:
+
+| | trades | median hold | bar cap | stop | target |
+|---|---|---|---|---|---|
+| SOL 4h | 101 | 7.0 days | **82.2%** | 13.9% | 3.0% |
+| SOL 1d | 86 | 7.0 days | **79.1%** | 17.4% | 3.5% |
+
+The target is hit 3% of the time and four trades in five die at the seven-day cap. This
+cell is not measuring a stop-and-target strategy; it is measuring **"hold SOL for seven
+days"**, on the instrument with the strongest drift in the store. That is the same trap
+finding 7 documented, and the time-of-day-matched null already prices it — which is
+precisely why p is 0.10 rather than significant. It is also SOL-only: the same strategy
+on BTC and ETH is negative net at both timeframes.
+
+The single raw p < 0.05 — `noise_breakout_long` on BTC 5m, p = 0.0497 — fails the
+out-of-sample gate for a different reason: gross **+0.132R in-sample, −0.085R out**, sign
+flipped.
+
+### Costs stop dominating here too, and it does not help
+
+The imported intraday strategies specify stops on a *daily* ATR scale, so 5m inherits
+swing-like drag rather than finding 1's −17.7R:
+
+| timeframe | median cost drag | median gross expectancy |
+|---|---|---|
+| 5m | −0.72R | +0.0038R |
+| 4h | −0.40R | +0.0053R |
+| 1d | −0.62R | −0.0338R |
+
+Gross edge is two orders of magnitude below the drag at every horizon. This is finding 2
+in a new setting: the configurations cheap enough to trade are the ones where there is
+nothing left to trade.
+
+### What this does and does not show
+
+It does **not** show these strategies do not work. Every one was implemented under three
+engine limits that all cut against it — entry at the next bar's open rather than on a
+stop order at the named price, ATR stops where a source specified a percentage or a
+price, and no trailing stops or indicator exits where Turtle, Connors and Zarattini all
+use them. Nine of the eighteen were also tested on instruments and a venue their authors
+never studied; five could not be tested at all.
+
+What it does show is narrower and still worth having: **on BTC, ETH and SOL, at
+obtainable costs, over four years, the published literature's best-known time-series
+rules do no better than the setups this project wrote itself — which is to say, no better
+than random entries with the same stop, target and holding rule.**
+
+---
+
 ## The conclusion, stated plainly
 
 **On BTC/USD, ETH/USD and SOL/USD, no pattern in this library is profitable under any tested
@@ -423,18 +541,25 @@ out of sample. It is roughly 5× too small to pay for its own execution.
 - **Not a different instrument.** ETH and SOL now tested across 4 configurations each:
   0 survivors, 0 positive net, and only 2 raw p<0.05 hits across 160 tests where chance
   produces ~8.
-- **Not an imported strategy from elsewhere.** The first one tested (finding 6, an EMA
-  cross with a trend filter and RSI confirmation) lands in the same place as the native
-  library: marginal gross edge, no BH survivor, net −5.22R.
+- **Not an imported strategy from elsewhere.** This was the most substantive remaining
+  objection — that the pattern library, not the market, was the problem. It has now been
+  tested twice. Finding 6 imported one TradingView strategy; finding 8 imported
+  **eighteen from published sources**, pre-registered as a fixed family, with each
+  author's own stop and target. Result: 1 raw p < 0.05 out of 105 scored tests where
+  chance produces ~5.3, and 0 BH survivors anywhere. The literature's best-known
+  time-series rules land where the native library did.
 - **Not a longer horizon.** This was the strongest remaining candidate, because it is
   the only lever that moves the cost ratio by 50× rather than 2×. Tested in finding 7:
   the drag duly collapses to −0.36R, and 0 of 20 detectors survive BH on any of six
   symbol × timeframe families. The constraint stops being cost and becomes the absence
   of edge.
-- What is left untested: other instruments beyond these three, and setups not in this
-  pattern library. The apparatus is instrument-agnostic and ready for them. Note that
-  a daily-bar study of anything will need more than four years of history — at one
-  position at a time, 1,458 daily bars cannot fill an out-of-sample window (finding 7).
+- What is left untested: other instruments beyond these three, and cross-sectional
+  strategies, which need a universe rather than three symbols and are the single largest
+  category finding 8 had to exclude. The apparatus is instrument-agnostic and ready for
+  more symbols. Note that a daily-bar study of anything will need more than four years of
+  history — at one position at a time, 1,458 daily bars cannot fill an out-of-sample
+  window (finding 7), and finding 8 showed five of eighteen published strategies are
+  untestable on this budget for the same reason.
 
 ### What this says about paper trading
 
@@ -457,3 +582,12 @@ is worth knowing before funding anything.
   venue's own bars to compare against.
 - Finding 7's daily rows are in-sample only, by necessity — no daily detector on any
   symbol reaches n≥30 out of sample.
+- **Finding 8 tests implementations, not the strategies themselves.** Entry at the next
+  bar's open, ATR-only stops, and no trailing or indicator exits are all engine limits
+  that make each imported strategy weaker than the rule its author published. A negative
+  result there is evidence about these rules *on this venue through this harness*, and
+  not a refutation of the source.
+- Finding 8 returns a verdict on 9 of 18 strategies. Four more are in-sample only, and
+  five cannot be evaluated at all on four years of data. Reading it as "18 published
+  strategies fail" overstates it; the accurate reading is "9 fail, 9 are unanswerable
+  here".

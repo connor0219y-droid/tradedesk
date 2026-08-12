@@ -17,8 +17,9 @@ from ..config import Config
 from ..frames import read_bars
 from ..resample import read_bars_any
 from ..levels import compute_levels
-from ..patterns import REGISTRY, detect
+from ..patterns import REGISTRY, PatternSpec, detect
 from ..patterns.regime import add_regime_columns
+from ..timeutil import tf_ms as _tf_ms
 from .baseline import run_baseline
 from .costs import CostModel
 from .engine import BacktestConfig, Trade, run_backtest
@@ -30,6 +31,27 @@ from .stats import compute
 
 def _mean(vals: list[float]) -> float | None:
     return sum(vals) / len(vals) if vals else None
+
+
+def _bt_for(spec: PatternSpec, run_bt: BacktestConfig, *, tf_ms: int) -> BacktestConfig:
+    """The backtest config a detector should be measured under.
+
+    Detectors without a RiskSpec -- every hand-written pattern in the library -- get the
+    run-wide config unchanged, so every number produced before this function existed is
+    reproduced exactly. Detectors WITH one get their source's parameters, with the
+    holding cap converted from days into bars at this timeframe.
+    """
+    risk = spec.risk
+    if risk is None:
+        return run_bt
+    return BacktestConfig(
+        stop_atr=risk.stop_atr,
+        target_r=risk.target_r,
+        max_bars=risk.bars_for(tf_ms),
+        min_bars_between_entries=risk.min_bars_between_entries,
+        hold_across_sessions=risk.hold_across_sessions,
+        atr_column=risk.atr_column,
+    )
 
 
 def _slices(trades: list[Trade], thresholds: dict[str, float]) -> list[tuple]:
@@ -94,6 +116,7 @@ def validate_series(
     bootstrap_iterations: int = 2000,
     use_intrabar: bool = True,
     costs: CostModel | None = None,
+    family: str | None = None,
 ) -> list[PatternReport]:
     bf = read_bars_any(con, symbol, timeframe, as_of=as_of, venue=cfg.venue.name)
     if bf.is_empty:
@@ -107,7 +130,7 @@ def validate_series(
             resolver = IntrabarResolver.from_frame(m1.to_polars())
 
     costs = costs or CostModel.for_symbol(cfg, symbol)
-    bt = BacktestConfig(
+    run_bt = BacktestConfig(
         stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
         min_bars_between_entries=min_bars_between_entries,
         hold_across_sessions=hold_across_sessions, atr_column=atr_column,
@@ -117,13 +140,27 @@ def validate_series(
     prov_n = int(cfg.backtest.get("provisional_n", 100))
 
     names = patterns or sorted(REGISTRY)
+    if family is not None:
+        names = [n for n in names if REGISTRY[n].family == family]
     reports: list[PatternReport] = []
 
     for name in names:
         spec = REGISTRY[name]
+        # A detector declaring its horizon is not evaluated outside it. Its columns may
+        # well be present here -- a 20-day Donchian channel exists on 5m bars -- but
+        # running it anyway would test a strategy at a horizon its pre-registration did
+        # not claim, and would enlarge the family the correction is sized for.
+        if not spec.runs_on(timeframe):
+            continue
         missing = [c for c in spec.requires if c not in df.columns]
         if missing:
             continue
+        # A detector imported from a published source carries that source's own stop,
+        # target and holding cap. Running it under the command line's defaults would
+        # report on a strategy that shares only its entry with the one that was
+        # published -- so the spec wins wherever it exists, and the run-wide config
+        # applies only to the hand-written library.
+        bt = _bt_for(spec, run_bt, tf_ms=_tf_ms(timeframe))
         sig = detect(df, name)
         res = run_backtest(
             df, sig, is_long=spec.is_long, timeframe=timeframe,
@@ -166,9 +203,11 @@ def validate_series(
         reports.append(
             PatternReport(
                 pattern=name, symbol=symbol, timeframe=timeframe,
-                direction=spec.direction, stop_atr=stop_atr, target_r=target_r,
-                max_bars=max_bars, min_bars_between_entries=min_bars_between_entries,
-                atr_column=atr_column, hold_across_sessions=hold_across_sessions,
+                direction=spec.direction, stop_atr=bt.stop_atr, target_r=bt.target_r,
+                max_bars=bt.max_bars,
+                min_bars_between_entries=bt.min_bars_between_entries,
+                atr_column=bt.atr_column,
+                hold_across_sessions=bt.hold_across_sessions,
                 in_sample=s_in, out_sample=s_out, in_sample_gross=s_in_gross,
                 gross_in=g_in, gross_out=g_out,
                 drag_in=drag, baseline=base, signals=res.signals_total,

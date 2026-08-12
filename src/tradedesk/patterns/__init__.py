@@ -5,7 +5,25 @@ lookback depth, and the engine applies the contiguity mask -- so a three-bar pat
 never fire across a six-hour venue outage.
 """
 
-from . import candles, regime, structures, trend  # noqa: F401  (registers the detectors)
-from .base import REGISTRY, PatternError, PatternSpec, detect, pattern, registered
+from . import (  # noqa: F401  (registers the detectors)
+    candles,
+    published,
+    regime,
+    structures,
+    trend,
+)
+from .base import (
+    REGISTRY,
+    PatternError,
+    PatternSpec,
+    RiskSpec,
+    detect,
+    families,
+    pattern,
+    registered,
+)
 
-__all__ = ["detect", "pattern", "registered", "REGISTRY", "PatternSpec", "PatternError"]
+__all__ = [
+    "detect", "pattern", "registered", "families", "REGISTRY", "PatternSpec",
+    "RiskSpec", "PatternError",
+]

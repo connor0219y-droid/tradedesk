@@ -27,12 +27,14 @@ from ..timeutil import tf_ms as _tf_ms
 from . import (  # noqa: F401
     barshape,
     context,
+    intraday,
     momentum,
     opening_range,
     prior,
     profile,
     scale,
     vwap,
+    windows,
 )
 from .base import REGISTRY, LevelContext, LevelSpec, assert_total, resolve_order
 from .scale import atr_percentile_frame, daily_atr_frame, distance_in_atr
@@ -52,6 +54,20 @@ DEFAULT_LEVELS = [
     "prior_session",
     "rvol_tod",
     "volume_profile",
+    # Indicators the imported published strategies read. Listed after the originals so
+    # the existing levels compute in exactly the order they always did.
+    "donchian",
+    "year_extremes",
+    "trend_averages",
+    "horizon_returns",
+    "bollinger",
+    "narrow_range",
+    "rsi_2",
+    "lbr_rsi",
+    "session_anchor",
+    "noise_band",
+    "stretch",
+    "prior_session_momentum",
 ]
 
 #: Intraday-scale levels: measured in INTRADAY ATR, which answers "how many stop-widths

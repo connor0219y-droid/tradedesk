@@ -48,6 +48,20 @@ levels-sweep:
 validate:
 	uv run tradedesk validate --symbol "BTC/USD" --timeframe 5m
 
+# The pre-registered published-strategy family (FINDINGS.md finding 8), exactly as it
+# was run. Every parameter here is fixed by PREREGISTRATION.md -- the 4,000 draws in
+# particular, so the p-value can resolve below the Benjamini-Hochberg threshold rather
+# than being clipped by it. Changing any of it means the correction no longer describes
+# the family that was declared.
+validate-published:
+	@for tf in 5m 4h 1d; do \
+	  for sym in "BTC/USD" "ETH/USD" "SOL/USD"; do \
+	    echo "=== $$sym $$tf ==="; \
+	    uv run tradedesk validate --symbol "$$sym" --timeframe $$tf \
+	      --family published --draws 4000; \
+	  done; \
+	done
+
 brief:
 	uv run tradedesk brief --timeframe 5m
 

@@ -279,6 +279,11 @@ def validate(
     symbol: str = typer.Option(..., "--symbol", help='e.g. "BTC/USD"'),
     timeframe: str = typer.Option("5m", "--timeframe"),
     pattern: Optional[str] = typer.Option(None, "--pattern", help="limit to one pattern"),
+    family: Optional[str] = typer.Option(
+        None, "--family",
+        help="limit to one pre-registered family, e.g. 'published'. The multiple-"
+             "testing correction is then applied across exactly that family.",
+    ),
     stop_atr: float = typer.Option(1.0, "--stop-atr"),
     target_r: float = typer.Option(2.0, "--target-r"),
     max_bars: int = typer.Option(48, "--max-bars", help="bar cap on holding period"),
@@ -312,7 +317,7 @@ def validate(
         stop_atr=stop_atr, target_r=target_r, max_bars=max_bars,
         min_bars_between_entries=min_bars_between,
         hold_across_sessions=hold_across_sessions, atr_column=atr_column,
-        baseline_draws=draws,
+        baseline_draws=draws, family=family,
     )
     if not reports:
         console.print(f"[red]no data[/red] for {symbol} {timeframe}")

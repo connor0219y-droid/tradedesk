@@ -23,7 +23,7 @@ from .base import LevelContext, level
     name="prior_session",
     kind="cross_session",
     depth=1,
-    outputs=("prior_day_high", "prior_day_low", "prior_day_close",
+    outputs=("prior_day_high", "prior_day_low", "prior_day_close", "prior_day_open",
              "premarket_high", "premarket_low"),
 )
 def _prior_session(ctx: LevelContext) -> pl.DataFrame:
@@ -36,12 +36,17 @@ def _prior_session(ctx: LevelContext) -> pl.DataFrame:
         pl.when(pl.col("valid")).then(pl.col("s_high")).otherwise(None).alias("_h"),
         pl.when(pl.col("valid")).then(pl.col("s_low")).otherwise(None).alias("_l"),
         pl.when(pl.col("valid")).then(pl.col("s_close")).otherwise(None).alias("_c"),
+        pl.when(pl.col("valid")).then(pl.col("s_open")).otherwise(None).alias("_o"),
     )
     prior = sessions.select(
         "session_date",
         pl.col("_h").shift(1).alias("prior_day_high"),
         pl.col("_l").shift(1).alias("prior_day_low"),
         pl.col("_c").shift(1).alias("prior_day_close"),
+        # The prior session's OPEN, which the 80-20 setup needs: its condition is about
+        # where the session opened WITHIN its eventual range, so the close alone cannot
+        # express it.
+        pl.col("_o").shift(1).alias("prior_day_open"),
     )
 
     return ctx.df.join(prior, on="session_date", how="left").with_columns(
