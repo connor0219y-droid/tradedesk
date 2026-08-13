@@ -41,12 +41,9 @@ from tradedesk.backtest.equity_costs import (  # noqa: E402
     estimate_spread,
     summarise,
 )
-from tradedesk.backtest.pooled import (  # noqa: E402
-    apply_correction,
-    build_report,
-    calendar_boundary,
-    symbol_null,
-)
+from tradedesk.backtest.baseline import draw_sums  # noqa: E402
+from tradedesk.backtest.pooled import apply_correction, build_report  # noqa: E402
+from tradedesk.backtest.split import Split  # noqa: E402
 from tradedesk.backtest.validate import _bt_for  # noqa: E402
 from tradedesk.calendars import EquityCalendar  # noqa: E402
 from tradedesk.config import load_config  # noqa: E402
@@ -129,9 +126,9 @@ def run_timeseries(con, cfg, symbols, timeframe, as_of, spreads):
 
     # One boundary, fixed by the calendar, shared by every detector and every symbol.
     lo, hi = to_ms(STUDY_START), to_ms(STUDY_END)
-    boundary = calendar_boundary(
+    boundary = Split.from_window(
         lo, hi, in_sample_pct=float(cfg.backtest.get("in_sample_pct", 70))
-    )
+    ).boundary_ms
     print(f"  holdout boundary: {datetime.fromtimestamp(boundary/1000, timezone.utc):%Y-%m-%d}")
 
     for i, sym in enumerate(symbols, 1):
@@ -159,9 +156,11 @@ def run_timeseries(con, cfg, symbols, timeframe, as_of, spreads):
             in_sample = [t for t in in_window if t.signal_ms < boundary]
             if not in_sample:
                 continue
-            part = symbol_null(df, in_sample, is_long=spec.is_long,
-                               timeframe=timeframe, costs=costs, bt=bt, resolver=None,
-                               draws=DRAWS, seed=_seed(n, sym))
+            # The SAME sampler `run_baseline` uses, called for its per-draw sums so
+            # they can be pooled across symbols before dividing.
+            part = draw_sums(df, in_sample, is_long=spec.is_long,
+                             timeframe=timeframe, costs=costs, bt=bt, resolver=None,
+                             draws=DRAWS, seed=_seed(n, sym))
             if part:
                 nulls[n].append(part)
         if i % 10 == 0 or i == len(symbols):

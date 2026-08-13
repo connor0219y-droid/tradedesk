@@ -10,13 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from tradedesk.backtest.pooled import (
-    SymbolNull,
-    apply_correction,
-    calendar_boundary,
-    pool_null,
-    split_trades,
-)
+from tradedesk.backtest.baseline import DrawSums
+from tradedesk.backtest.pooled import apply_correction, pool_null
+from tradedesk.backtest.split import Split, partition_trades
 
 
 class _T:
@@ -35,8 +31,8 @@ def test_pooled_null_weights_by_trade_count_not_by_symbol():
     -- averaging the averages would let a thin, noisy name swing the null as much as the
     whole rest of the universe.
     """
-    big = SymbolNull(sums=[300.0], counts=[300])    # mean 1.0
-    small = SymbolNull(sums=[30.0], counts=[3])     # mean 10.0
+    big = DrawSums(gross=[300.0], net=[300.0], taken=[300])    # mean 1.0
+    small = DrawSums(gross=[30.0], net=[30.0], taken=[3])     # mean 10.0
     pooled = pool_null([big, small], draws=1)
     assert pooled[0] == pytest.approx((300.0 + 30.0) / 303)
     # The mean-of-means answer would be 5.5; that is the bug this guards.
@@ -46,7 +42,7 @@ def test_pooled_null_weights_by_trade_count_not_by_symbol():
 def test_pooled_null_skips_draws_where_nothing_traded():
     """A draw in which no symbol produced a fill contributes no observation rather
     than a zero -- a zero would be a real portfolio that broke even."""
-    empty = SymbolNull(sums=[0.0, 5.0], counts=[0, 5])
+    empty = DrawSums(gross=[0.0, 5.0], net=[0.0, 5.0], taken=[0, 5])
     pooled = pool_null([empty], draws=2)
     assert pooled == [1.0]
 
@@ -64,36 +60,36 @@ def test_the_boundary_is_calendar_time_not_trade_density():
     trade-percentile split would cut inside that cluster; a calendar split must not.
     """
     span_lo, span_hi = 0, 1_000_000
-    boundary = calendar_boundary(span_lo, span_hi, in_sample_pct=70)
+    boundary = Split.from_window(span_lo, span_hi, in_sample_pct=70).boundary_ms
     assert boundary == 700_000, "boundary must be 70% of the calendar span"
 
     clustered = [_T(i * 100) for i in range(90)] + [_T(900_000 + i * 100) for i in range(10)]
-    in_s, out_s = split_trades(clustered, boundary_ms=boundary)
+    in_s, out_s = partition_trades(clustered, Split(boundary_ms=boundary, in_sample_pct=70))
     assert len(in_s) == 90 and len(out_s) == 10
     assert max(t.signal_ms for t in in_s) < boundary <= min(t.signal_ms for t in out_s)
 
 
 def test_the_boundary_does_not_move_with_the_detector():
     """Two detectors with wildly different trade counts must share one holdout."""
-    boundary = calendar_boundary(0, 1_000_000, in_sample_pct=70)
+    boundary = Split.from_window(0, 1_000_000, in_sample_pct=70).boundary_ms
     busy = [_T(i * 1000) for i in range(1000)]
     sparse = [_T(i * 100_000) for i in range(10)]
-    b_in, b_out = split_trades(busy, boundary_ms=boundary)
-    s_in, s_out = split_trades(sparse, boundary_ms=boundary)
+    b_in, b_out = partition_trades(busy, Split(boundary_ms=boundary, in_sample_pct=70))
+    s_in, s_out = partition_trades(sparse, Split(boundary_ms=boundary, in_sample_pct=70))
     assert all(t.signal_ms < boundary for t in b_in + s_in)
     assert all(t.signal_ms >= boundary for t in b_out + s_out)
 
 
 def test_split_is_chronological_regardless_of_input_order():
-    boundary = calendar_boundary(0, 1000, in_sample_pct=50)
+    boundary = Split.from_window(0, 1000, in_sample_pct=50).boundary_ms
     trades = [_T(500), _T(100), _T(900), _T(300)]
-    in_s, out_s = split_trades(trades, boundary_ms=boundary)
+    in_s, out_s = partition_trades(trades, Split(boundary_ms=boundary, in_sample_pct=50))
     assert [t.signal_ms for t in in_s] == [100, 300]
     assert [t.signal_ms for t in out_s] == [500, 900]
 
 
 def test_empty_input_is_handled():
-    assert split_trades([], boundary_ms=500) == ([], [])
+    assert partition_trades([], Split(boundary_ms=500, in_sample_pct=70)) == ([], [])
     assert pool_null([], draws=10) == []
 
 

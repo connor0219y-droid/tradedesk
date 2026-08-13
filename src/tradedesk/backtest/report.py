@@ -86,6 +86,27 @@ class PatternReport:
         return VERDICT_TRADEABLE
 
 
+def benjamini_hochberg(
+    sorted_p: list[float], *, m: int, fdr: float = 0.05
+) -> tuple[int, list[float]]:
+    """The BH arithmetic, and nothing else. One implementation, every caller.
+
+    Takes p-values ALREADY SORTED ASCENDING and the family size `m`, which is passed
+    separately because it is not always `len(sorted_p)`: a family can contain tests that
+    produced no p-value at all, and those still belong in the denominator. Dropping them
+    after seeing which ones failed would inflate every surviving threshold.
+
+    Returns `(largest_k, thresholds)` -- reject the first `largest_k`, and the rank-k
+    threshold is `thresholds[k-1]`.
+    """
+    thresholds = [((k / m) * fdr) for k in range(1, len(sorted_p) + 1)]
+    largest_k = 0
+    for k, p in enumerate(sorted_p, start=1):
+        if p <= thresholds[k - 1]:
+            largest_k = k
+    return largest_k, thresholds
+
+
 def apply_multiple_testing_correction(
     reports: list[PatternReport], *, fdr: float = 0.05
 ) -> int:
@@ -104,13 +125,12 @@ def apply_multiple_testing_correction(
         return 0
 
     ordered = sorted(scored, key=lambda r: r.baseline.p_value)
-    largest_k = 0
-    for k, rep in enumerate(ordered, start=1):
-        if rep.baseline.p_value <= (k / m) * fdr:
-            largest_k = k
+    largest_k, thresholds = benjamini_hochberg(
+        [r.baseline.p_value for r in ordered], m=m, fdr=fdr
+    )
 
     for k, rep in enumerate(ordered, start=1):
-        rep.bh_threshold = (k / m) * fdr
+        rep.bh_threshold = thresholds[k - 1]
         rep.survives_correction = k <= largest_k
     for rep in reports:
         if rep.baseline is None:

@@ -55,6 +55,23 @@ class Split:
             raise LeakageError(f"{len(overlap)} bars appear in both windows")
 
 
+    @classmethod
+    def from_window(
+        cls, start_ms: int, end_ms: int, *, in_sample_pct: float = 70.0
+    ) -> "Split":
+        """A boundary at a fraction of a DECLARED window.
+
+        `make_split` derives the window from whatever frame it is handed; this takes it
+        explicitly, which is what a pooled study across many symbols needs -- there the
+        window is the study's, not any one symbol's, and every detector must share it.
+        Same arithmetic either way, so the two cannot drift.
+        """
+        return cls(
+            boundary_ms=start_ms + int((end_ms - start_ms) * (in_sample_pct / 100.0)),
+            in_sample_pct=in_sample_pct,
+        )
+
+
 def make_split(df: pl.DataFrame, *, in_sample_pct: float = 70.0) -> Split:
     """Split by TIME, not by row count.
 
@@ -64,10 +81,11 @@ def make_split(df: pl.DataFrame, *, in_sample_pct: float = 70.0) -> Split:
     """
     if df.is_empty():
         return Split(boundary_ms=0, in_sample_pct=in_sample_pct)
-    lo = int(df["bar_open_ms"].min())
-    hi = int(df["bar_open_ms"].max())
-    boundary = lo + int((hi - lo) * (in_sample_pct / 100.0))
-    return Split(boundary_ms=boundary, in_sample_pct=in_sample_pct)
+    return Split.from_window(
+        int(df["bar_open_ms"].min()),
+        int(df["bar_open_ms"].max()),
+        in_sample_pct=in_sample_pct,
+    )
 
 
 def partition_trades(trades: list, split: Split) -> tuple[list, list]:

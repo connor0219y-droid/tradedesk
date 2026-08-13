@@ -1,5 +1,20 @@
 """Pooled validation: one test per detector across a universe of symbols.
 
+WHAT THIS MODULE IS NOW, AND WHAT IT WAS. It used to be a parallel implementation of the
+scoring path -- its own sampler, its own splitter, its own Benjamini-Hochberg. That
+duplication was the root cause of finding 10: reimplementing machinery that already
+existed correctly reintroduced three defects the originals had already solved, including
+one that `split.py` carries an explicit comment defending against. Two published
+p-values were wrong as a result.
+
+So there is no sampler here any more, and no splitter, and no correction. This module
+does exactly one thing the single-series path cannot: it POOLS. Everything else is
+called:
+
+    sampling   -> baseline.draw_sums     (the same function run_baseline uses)
+    splitting  -> split.Split + partition_trades
+    correction -> report.benjamini_hochberg
+
 WHY POOLING, AND WHAT IT CLAIMS. Part 1 tested three crypto symbols and treated each as
 its own family. At 50 symbols that stops working twice over. Arithmetically, 26 detectors
 against 50 names is 1,300 tests whose smallest Benjamini-Hochberg threshold is 4e-5 --
@@ -13,39 +28,30 @@ the claim being tested, and it is one test.
 
 THE NULL IS POOLED IDENTICALLY, which is the part that makes the comparison mean
 anything. For each draw, random entries are sampled PER SYMBOL -- matched to that
-symbol's own time-of-day histogram and its own trade count on that symbol -- and then
-pooled into a single null mean. So the strategy and its null face identical symbol
-composition, identical per-symbol trade counts, and identical hours. The only thing that
-differs is which bars were chosen.
+symbol's own time-of-day histogram and its own trade count -- and then pooled into a
+single null mean. Summing before dividing is what weights a symbol by its trade count
+rather than by existing.
 
 WHAT POOLING COSTS, stated here rather than discovered in the writeup. Part 1's
 one-position-at-a-time rule kept trades close enough to independent that a bootstrap
 interval meant something. Pooling across 50 names breaks that: positions overlap in time
 and equities are cross-sectionally correlated through market beta, so the effective
-sample is far smaller than the trade count suggests. Two things limit the damage -- the
-null carries the same correlation, since it is pooled the same way, and the p-value comes
-from that matched null rather than from a parametric interval. The bootstrap CI is still
-computed and reported, and it is still too tight. It is not a gate.
-
-MEMORY. The per-draw null sums are accumulated symbol by symbol rather than held as a
-full trade matrix. At 5m a single symbol carries ~290,000 bars, and materialising every
-draw's picks for 50 of them at once would be gigabytes for no gain.
+sample is far smaller than the trade count suggests. The p-value comes from a matched
+null rather than a parametric interval, but see PREREGISTRATION.md: the null is
+*aggregated* identically and *sampled* independently per symbol, so it does not
+reproduce the calendar clustering of real signals and the time-series p-values are
+anti-conservative. The bootstrap CI is reported, is optimistic, and is not a gate.
 """
 
 from __future__ import annotations
 
-import random
-from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-import polars as pl
-
-from .costs import CostModel
-from .engine import BacktestConfig, Trade, precompute_outcomes, run_backtest
-from .exits import IntrabarResolver
+from .baseline import DrawSums
+from .engine import BacktestConfig, Trade
+from .report import benjamini_hochberg
+from .split import Split, partition_trades
 from .stats import Stats, compute
-
-TOD_BUCKET_MS = 3_600_000
 
 
 @dataclass
@@ -87,143 +93,22 @@ class PooledReport:
         return (self.gross_in >= 0) == (self.gross_out >= 0)
 
 
-def _tod_bucket(ms: int | None) -> int:
-    return -1 if ms is None else int(ms // TOD_BUCKET_MS)
+def pool_null(parts: list[DrawSums], draws: int) -> list[float]:
+    """Pooled null means: total gross over total trades, per draw, across symbols.
 
-
-@dataclass
-class SymbolNull:
-    """Per-draw gross sums and counts contributed by one symbol.
-
-    Kept as two flat lists rather than a trade matrix so that pooling is an addition
-    across symbols and memory stays proportional to the draw count, not to bar count.
+    `parts` come from `baseline.draw_sums` -- the same sampler `run_baseline` uses, not
+    a second copy of it. Summing before dividing is what weights a symbol by its trade
+    count rather than by existing.
     """
-
-    sums: list[float]
-    counts: list[int]
-
-
-def symbol_null(
-    df: pl.DataFrame,
-    trades: list[Trade],
-    *,
-    is_long: bool,
-    timeframe: str,
-    costs: CostModel,
-    bt: BacktestConfig,
-    resolver: IntrabarResolver | None,
-    draws: int,
-    seed: int,
-) -> SymbolNull | None:
-    """This symbol's contribution to each of `draws` pooled null portfolios.
-
-    Reproduces `baseline.run_baseline`'s sampling exactly -- time-of-day matched,
-    sampled with replacement, subject to the same one-position-at-a-time and cooldown
-    rules the real backtest applies -- but returns the per-draw sums instead of a mean,
-    so the caller can pool before dividing. Averaging per symbol first and then averaging
-    the averages would weight a symbol with three trades the same as one with three
-    hundred.
-    """
-    if not trades:
-        return None
-
-    target_hist = Counter(_tod_bucket(t.tod_ms) for t in trades)
-    tod = df["ms_since_open"].to_list() if "ms_since_open" in df.columns else []
-    gap = df["gap"].to_list()
-    atr = df[bt.atr_column].to_list()
-
-    pool: dict[int, list[int]] = defaultdict(list)
-    for i in range(df.height - 1):
-        if gap[i + 1]:
-            continue
-        a = atr[i]
-        if a is None or a <= 0:
-            continue
-        pool[_tod_bucket(tod[i] if tod else None)].append(i)
-
-    outcomes = precompute_outcomes(
-        df, is_long=is_long, timeframe=timeframe, costs=costs, bt=bt, resolver=resolver
-    )
-    if not outcomes:
-        return None
-
-    rng = random.Random(seed)
-    sums: list[float] = []
-    counts: list[int] = []
-    for _ in range(draws):
-        picks: list[int] = []
-        for bucket, count in target_hist.items():
-            candidates = pool.get(bucket)
-            if not candidates:
-                continue
-            picks.extend(rng.choice(candidates) for _ in range(count))
-        picks.sort()
-
-        total = 0.0
-        taken = 0
-        busy_until = -1
-        last_entry = None
-        for i in picks:
-            if i <= busy_until:
-                continue
-            if last_entry is not None and (i + 1) - last_entry < bt.min_bars_between_entries:
-                continue
-            got = outcomes.get(i)
-            if got is None:
-                continue
-            exit_idx, gross, _net = got
-            total += gross
-            taken += 1
-            busy_until = exit_idx
-            last_entry = i + 1
-        sums.append(total)
-        counts.append(taken)
-
-    return SymbolNull(sums=sums, counts=counts)
-
-
-def pool_null(parts: list[SymbolNull], draws: int) -> list[float]:
-    """Pooled null means: total gross over total trades, per draw, across symbols."""
     if not parts:
         return []
     out: list[float] = []
     for d in range(draws):
-        total = sum(p.sums[d] for p in parts)
-        n = sum(p.counts[d] for p in parts)
+        total = sum(p.gross[d] for p in parts)
+        n = sum(p.taken[d] for p in parts)
         if n:
             out.append(total / n)
     return out
-
-
-def calendar_boundary(start_ms: int, end_ms: int, *, in_sample_pct: float) -> int:
-    """The holdout boundary, as a fraction of CALENDAR TIME rather than of trades.
-
-    THE BUG THIS REPLACES. The previous version took the signal time of the trade at the
-    70th percentile of the sorted trade list. That is one instant, so every symbol did
-    share a boundary -- but WHICH instant was decided by trade density. A detector that
-    fires often on three busy names and rarely on the rest let those three names drag the
-    cut, and the holdout then covered a different span of market history for that
-    detector than for its neighbour in the same family. Two detectors in one table were
-    being held out against different periods.
-
-    Deriving it from the calendar makes the holdout the same span of history for every
-    detector and every symbol, which is what "out of sample" is supposed to mean.
-    """
-    return start_ms + int((end_ms - start_ms) * in_sample_pct / 100.0)
-
-
-def split_trades(
-    trades: list[Trade], *, boundary_ms: int
-) -> tuple[list[Trade], list[Trade]]:
-    """Split on a fixed instant supplied by the caller.
-
-    Strictly before the boundary is in-sample; at or after is held out.
-    """
-    ordered = sorted(trades, key=lambda t: t.signal_ms)
-    return (
-        [t for t in ordered if t.signal_ms < boundary_ms],
-        [t for t in ordered if t.signal_ms >= boundary_ms],
-    )
 
 
 def _mean(vals: list[float]) -> float | None:
@@ -236,7 +121,7 @@ def build_report(
     timeframe: str,
     direction: str,
     trades_by_symbol: dict[str, list[Trade]],
-    null_parts: list[SymbolNull],
+    null_parts: list[DrawSums],
     signals: int,
     bt: BacktestConfig,
     round_trip_bps: float,
@@ -247,7 +132,12 @@ def build_report(
     bootstrap_iterations: int,
 ) -> PooledReport:
     all_trades = [t for ts in trades_by_symbol.values() for t in ts]
-    in_t, out_t = split_trades(all_trades, boundary_ms=boundary_ms)
+    # The project's own splitter, on the project's own Split object -- not a second
+    # implementation. `partition_trades` assigns by SIGNAL time, and `assert_no_overlap`
+    # fails loudly if the two windows ever share a trade.
+    split = Split(boundary_ms=boundary_ms, in_sample_pct=0.0)
+    in_t, out_t = partition_trades(all_trades, split)
+    split.assert_no_overlap([t.signal_ms for t in in_t], [t.signal_ms for t in out_t])
 
     s_in = compute([t.r_net for t in in_t], bootstrap_iterations=bootstrap_iterations,
                    min_n=min_n, provisional_n=provisional_n)
@@ -298,6 +188,9 @@ def apply_correction(
     not control the false discovery rate over their union, and the union is what gets
     looked at.
 
+    The arithmetic itself is `report.benjamini_hochberg`, shared with the per-series
+    correction so the two cannot disagree about what BH means.
+
     Tests with no p-value -- too few trades to score -- are returned as (False, 0.0) and
     still counted in `m`. Dropping them from the denominator after seeing which ones
     failed would inflate every surviving threshold.
@@ -308,14 +201,12 @@ def apply_correction(
     scored = sorted(
         ((label, p) for label, p in p_values if p is not None), key=lambda x: x[1]
     )
-    largest_k = 0
-    for k, (_label, p) in enumerate(scored, start=1):
-        if p <= (k / m) * fdr:
-            largest_k = k
+    largest_k, thresholds = benjamini_hochberg([p for _, p in scored], m=m, fdr=fdr)
 
-    out: dict[str, tuple[bool, float]] = {}
-    for k, (label, _p) in enumerate(scored, start=1):
-        out[label] = (k <= largest_k, (k / m) * fdr)
+    out: dict[str, tuple[bool, float]] = {
+        label: (k <= largest_k, thresholds[k - 1])
+        for k, (label, _p) in enumerate(scored, start=1)
+    }
     for label, p in p_values:
         if p is None:
             out[label] = (False, 0.0)
