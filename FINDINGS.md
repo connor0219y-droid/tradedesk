@@ -640,6 +640,116 @@ ninety-six.
 
 ---
 
+## 10. Reviewing the harness: two of finding 9's results were the harness's fault
+
+Findings 1-9 apply one standard: a pattern is folklore until it has been tested against
+a random baseline with the same constraints. Finding 10 applies that standard to the
+thing doing the testing.
+
+It was worth doing. **A review of the scoring path found four defects in code that had
+already produced committed, written-up results — and two of the p-values reported in the
+first version of finding 9 were false positives.**
+
+### What was found
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | p-value scored on the **full sample** while every gate read **in-sample** | The holdout leaked into the significance test. Two strategies reported as raw-significant had **negative in-sample returns**. |
+| 2 | Holdout boundary derived from **trade density**, not the calendar | Two detectors in the same table were held out against **different spans of market history**. |
+| 3 | Monte Carlo seeded with `hash()`, which Python **randomises per process** | Re-running the command that produced finding 9 would not have reproduced finding 9. |
+| 4 | The pre-registration claimed the pooled null "is pooled identically, so the correlation is present on both sides" | **False.** The null is aggregated identically but *sampled* independently per symbol, so it does not reproduce the calendar clustering of real signals. Time-series p-values are anti-conservative. |
+
+A fifth, found while fixing the second: the backtest was trading over the 420-day warmup
+fetched only to warm formation windows, so trades signalled in 2017 were being counted in
+a study declared as 2018-08 onward.
+
+### The false positives, concretely
+
+Fixing defect 1 moved results in **both** directions, which is the tell that the leak was
+not biased toward a conclusion — it was measuring the wrong sample:
+
+| strategy | p before | p after | in-sample gross |
+|---|---|---|---|
+| `xs_momentum_12_1` | 0.026 | **0.662** | **−0.06%/mo** |
+| `xs_momentum_6_1` | 0.048 | **0.790** | **−0.11%/mo** |
+| `xs_reversal_long_term` | 0.158 | **0.00025** | +0.72%/mo |
+| `xs_low_volatility` | 0.00025 | 0.00325 | +0.37%/mo |
+
+Both momentum legs were reported as raw-significant while **losing money in-sample**. Their
+full-sample figures were carried entirely by the held-out period — which is precisely
+what a holdout exists to prevent, running backwards.
+
+### The uncomfortable part: the old code was already right
+
+None of the first three defects were new problems. The crypto path had solved all of
+them, and `split.py` carries an explicit comment defending the very invariant the new
+code broke:
+
+> *"Split by TIME, not by row count. A row-count split would put a disproportionate share
+> of quiet, sparse sessions on one side; splitting on the time axis keeps each window a
+> contiguous stretch of market history, which is what 'out of sample' is supposed to
+> mean."*
+
+`validate_series` had always scored its baseline on in-sample trades. `run_baseline` had
+always used a fixed seed. **The new pooled scorer reimplemented machinery that already
+existed correctly, and regressed on every one of these points.** Writing a parallel
+implementation rather than generalising the existing one is what made that possible.
+
+### What the safeguards caught, and what they did not
+
+The decision rule held. Despite defect 1, **nothing qualified** in either version of
+finding 9 — the out-of-sample sign gate and the sample-size gate rejected the false
+positives on other grounds. The gates were robust to the bug.
+
+The *reported numbers* were not. Two strategies were published as raw-significant when
+they were not, and the p-value column of a committed findings document was wrong. A
+reader checking whether the correction was applied correctly would have been misled about
+which tests were near the line.
+
+**Every one of the four failed silently.** No exception, no test failure, no implausible
+output. Non-reproducible seeds look exactly like working code. A leaked holdout produces
+perfectly plausible p-values. A trade-density boundary produces a real split. This is the
+same failure class as the lookahead bugs the project already guards against, which is why
+the guards exist — and why they need to cover the harness too.
+
+### What actually found them
+
+Not the test suite: **380 tests passed throughout, at every commit, before and after.**
+The suite caught exactly one thing — an incomplete fix, where bounding the RTH segment
+pushed after-hours bars into the premarket branch, which was also unbounded.
+
+The rest came from three habits, none of which are automated:
+
+1. **Predicting a diff before running it.** Re-verifying the session refactor turned up
+   that "225 of 231 rows identical" was stale — measured before three subsequent changes.
+   The true figure was 193 of 231, with 38 rows moved. Stating the expected result first
+   is what made the discrepancy visible rather than reassuring.
+2. **Re-reading the pre-registration against the implementation**, which is how defect 4
+   surfaced: a document written to enforce honesty contained an overstatement in the
+   strategy's favour.
+3. **Reading new code adversarially against the old code it duplicates.**
+
+### Findings 1-8 are unaffected, and this was checked rather than assumed
+
+All four defects live in the equity scoring path. `validate_series`, which produced
+findings 1-8, scored in-sample, split by time, and used a fixed seed throughout.
+
+The session-model rewrite *did* touch the crypto results, and that was re-verified against
+a pre-refactor snapshot: **38 of 231 rows moved, and no verdict changed.** Six were a
+genuine DST fix at 5m; the other 32 were p-value-only shifts at 1d, caused by the daily
+null no longer being partitioned by DST regime. Zero rows crossed p = 0.05, and the family
+still reports 1 raw hit, 0 BH survivors, 0 qualifying.
+
+### The limit of this finding
+
+**This was self-review.** The independent multi-agent review could not run — the diff was
+54,601 lines, four times the limit, dominated by a 49,394-line membership file. So the
+right reading is not "the harness has now been verified" but "one pass by the author found
+four defects, three of them in code that duplicated already-correct machinery, and two
+published p-values were wrong." That is a lower bound on what is there, not an upper one.
+
+---
+
 ## The conclusion, stated plainly
 
 **On BTC/USD, ETH/USD and SOL/USD, no pattern in this library is profitable under any tested
@@ -700,6 +810,10 @@ is worth knowing before funding anything.
 
 ### Caveats worth keeping
 
+- **The harness has been reviewed once, by its author, and that pass found four defects
+  and two false positives (finding 10).** Every conclusion here rests on code of which
+  that is true. The independent review could not run — the diff exceeded its limit — so
+  finding 10 is a lower bound on what is there, not a clean bill of health.
 - BTC/USD only. ETH and SOL are unswept.
 - The *choice* of which slices to test was informed by an earlier in-sample table, which
   BH does not fully correct for. The out-of-sample survival is the stronger evidence.
